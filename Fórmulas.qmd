@@ -422,6 +422,8 @@ Un índice de precios elemental es un índice de precios de un agregado elementa
 
 Inicialmente se supone que los precios de los cuatro artículos se recopilan todos los meses, con lo cual se dispone de un conjunto completo de precios. No desaparece ningún artículo ni falta ningún precio, y tampoco hay artículos de reemplazo. Se trata de un supuesto bastante fuerte, pues muchos de los problemas que surgen en la práctica se deben a rupturas en la continuidad de la serie de precios de los artículos individuales, por cualquier motivo. 
 
+Tres fórmulas muy utilizadas por las oficinas de estadística para calcular los índices de precios elementales. Sin embargo, cabe tener en cuenta que no constituyen las únicas posibilidades y más adelante se consideran algunas fórmulas alternativas. 
+
 # Índices 
 
 # Lowe:
