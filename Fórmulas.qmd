@@ -1,5 +1,5 @@
 ---
-title: "Fórmulas"
+title: "Ejercicio de Cálculo del IPC"
 author: "Elvis Casco"
 crossref:
   fig-title: Gráfico     # (default is "Figure")
@@ -7,16 +7,16 @@ crossref:
   fig-prefix: Gráfico   # (default is "Figure")
   tbl-prefix: Tabla    # (default is "Table")
 format:
-  html:
-    toc: true
-    code-fold: true
-  # pdf: 
-  #   documentclass: report
-  #   classoption: landscape
-  #   geometry:
-  #     - top=5mm
-  #     - left=10mm
-  #     - right=10mm
+  # html:
+  #   toc: true
+  #   code-fold: true
+  docx: 
+    documentclass: report
+    # classoption: landscape
+    geometry:
+      - top=5mm
+      - left=1mm
+      - right=1mm
     echo: false
     warnings: false
     keep-ipynb: true
@@ -422,7 +422,21 @@ Un índice de precios elemental es un índice de precios de un agregado elementa
 
 Inicialmente se supone que los precios de los cuatro artículos se recopilan todos los meses, con lo cual se dispone de un conjunto completo de precios. No desaparece ningún artículo ni falta ningún precio, y tampoco hay artículos de reemplazo. Se trata de un supuesto bastante fuerte, pues muchos de los problemas que surgen en la práctica se deben a rupturas en la continuidad de la serie de precios de los artículos individuales, por cualquier motivo. 
 
-Tres fórmulas muy utilizadas por las oficinas de estadística para calcular los índices de precios elementales. Sin embargo, cabe tener en cuenta que no constituyen las únicas posibilidades y más adelante se consideran algunas fórmulas alternativas. 
+Tres fórmulas muy utilizadas por las oficinas de estadística para calcular los índices de precios elementales. Sin embargo, cabe tener en cuenta que no constituyen las únicas posibilidades y más adelante se consideran algunas fórmulas alternativas.
+
+1. Índice de Carli para $i = 1,..., n$ artículos. Se define como la media aritmética simple, o no ponderada, de los cocientes relativos de precios, o cocientes de precios, de los dos períodos, 0 y t, que se comparan:
+
+$I^{0:t_C}=\frac{1}{n}\sum (\frac{p_i^t}{p_i^0})$
+
+2. Índice de Dutot, que se define como el cociente de las medias aritméticas no ponderadas de los precios:
+
+$I^{0:t_D}=\frac{\frac{1}{n}\sum p_i^t}{\frac{1}{n}\sum p_i^0}$
+
+3. Índice de Jevons, que se define como la media geométrica no ponderada de los relativos de precios o cocientes, que es idéntica al cociente de las medias geométricas simples de los precios:
+
+$I_J^{0:t}=\prod (\frac{p_i^t}{p_i^0})^{\frac{1}{n}} = \frac{\prod p_i^t^{\frac{1}{n}}}{\prod p_i^0^{\frac{1}{n}}}$
+
+$i_V^r = \sqrt[n]{{i_{ev_1}^r,i_{ev_2}^r,...,i_{ev_n}^r}} \text{ for v in } V^r$
 
 # Índices 
 
