@@ -1,0 +1,469 @@
+---
+title: "Fórmulas"
+author: "Elvis Casco"
+crossref:
+  fig-title: Gráfico     # (default is "Figure")
+  tbl-title: Tabla     # (default is "Table")
+  fig-prefix: Gráfico   # (default is "Figure")
+  tbl-prefix: Tabla    # (default is "Table")
+format:
+  html:
+    toc: true
+    code-fold: true
+  # pdf: 
+  #   documentclass: report
+  #   classoption: landscape
+  #   geometry:
+  #     - top=5mm
+  #     - left=10mm
+  #     - right=10mm
+    echo: false
+    warnings: false
+    keep-ipynb: true
+jupyter: python3
+---
+
+
+```{python}
+# %pip install --upgrade polars
+
+# import duckdb
+# import glob
+# import matplotlib.pyplot as plt
+import numpy as np
+# import os
+import polars as pl
+# import pandas as pd
+# import pyarrow
+# import reader
+# import time
+
+from great_tables import GT
+# from math import ceil
+# from multiprocessing import Pool
+# from typing import Dict, Any
+# from typing import Optional
+
+wd = "C:/Directorio_Trabajo/2024/IPC_Calc/"
+```
+
+```{python}
+# DataFrame de ponderaciones por agrupación y región desde hoja de Excel
+def get_ponds_from_xlsx():
+    df = pl.read_excel(
+        source = wd + "Categorias.xlsx",
+        sheet_name = "Regiones",
+        infer_schema_length=None,
+        schema_overrides={
+            "División": pl.String,
+            "Grupo": pl.String,
+            "Clase": pl.String,
+            "SubClase": pl.String,
+            "Categoría": pl.String,
+            "Producto": pl.String,
+            },
+    )[:,1:]
+    df = df.with_columns(
+        pl.col("Código").str.slice(0, 2).alias("División"),
+        pl.col("Código").str.slice(0, 3).alias("Grupo"),
+        pl.col("Código").str.slice(0, 4).alias("Clase"),
+        pl.col("Código").str.slice(0, 5).alias("SubClase"),
+        pl.col("Código").str.slice(0, 6).alias("Categoría"),
+        pl.col("Código").str.slice(0, 8).alias("Producto"),
+        )
+    return df
+
+# DataFrame de índices desde hoja de Excel
+def get_df_from_xlsx(region):
+    df = pl.read_excel(
+        source = wd + "Ejercicio calculo IPC - Investigación.xlsx",
+        sheet_name = region
+    )[:,2:]
+    return df
+
+# Solo los datos que contienen Precio, Unidad de Medida o Contenido; depura establecimientos
+def get_valid_columns_in_df(df):
+    nombres_t = df.columns
+    df[1,0]="Precio"
+    df[1,1]="Unidad de Medida"
+    df[1,2]="Contenido"
+
+    check_list=["Precio","Unidad de Medida","Contenido"] 
+    row_values = df.row(1)
+    conditions_met = [value in check_list for value in row_values]
+    df = df[conditions_met]
+    return df
+
+# Repetir los valores de los establecimientos en la primera fila
+def repeat_names_in_row(row):
+    row = list(row)
+    for i in range(1, len(row)):
+        if i % 3 != 0:
+            row[i] = row[i - (i % 3)]
+    return row
+
+def replace_names_in_df(df,row_index,modified_row):
+    row_values = df.row(row_index)
+    df = df.with_columns([
+        pl.when(
+            pl.arange(0, df.height) == row_index
+            ).then(
+                pl.lit(modified_row[i])
+            ).otherwise(pl.col(col)
+            ).alias(col)
+        for i, col in enumerate(df.columns)
+    ])
+    return df
+
+def modify_df_names(df):
+    modified_row = repeat_names_in_row(df.row(0))
+    df = replace_names_in_df(df,0,modified_row)
+    return df
+
+def replace_unnamed(row):
+    for i in range(1, len(row)):
+        if r"UNNAMED" in row[i]:
+            row[i] = row[i - 1]
+    return row
+
+def modify_df_establecimientos(df):
+    modified_row = df.columns
+    df = replace_names_in_df(df,2,modified_row)
+    row_index = 2
+    row_values = df.row(row_index)
+    modified_row = replace_unnamed(list(row_values))
+    df = replace_names_in_df(df,2,modified_row)
+    return df
+
+def obtener_dataframe(region):
+    df = get_df_from_xlsx(region)
+    df = get_valid_columns_in_df(df)
+    df = modify_df_names(df)
+    df = modify_df_establecimientos(df)
+    df[0,1] = "."
+    a_list = ["Unidad de Medida","Codigo",'.']
+    df = df.filter(
+        pl.col('Codigo').str.contains_any(a_list))
+    indices_to_select = [1] + list(range(3, len(df.columns)))
+    columns_to_select = [df.columns[i] for i in indices_to_select]
+    df = df.select(columns_to_select)
+    df = df.transpose(include_header=False)
+    new_column_names_row = df.row(0)
+    new_column_names = list(new_column_names_row)
+    rename_dict = {
+        old: new for old, new in zip(df.columns, new_column_names)}
+    df = df.rename(rename_dict)
+    df = df[1:,:]
+    return df
+
+def obtener_precio_t_1(region):
+    df = obtener_dataframe(region)
+    df_Precio_t_1 = df.filter(
+        pl.col('Codigo').str.contains('t-1'))
+    df_Precio_t_1 = df_Precio_t_1.filter(
+        pl.col('Unidad de Medida').str.contains('Precio'))
+    df_Precio_t_1.write_excel(
+        workbook = wd + region + "/" + region + "_Precio_t_1.xlsx")
+    word = ' Precio'
+    pattern = f'{word}.*'
+    df_Precio_t_1 = df_Precio_t_1.with_columns(
+        pl.col('Codigo').str.replace(pattern,""))
+    word = ' Precio'
+    pattern = f'{word}.*'
+    df_Precio_t_1 = df_Precio_t_1.with_columns(
+        pl.col('Codigo').str.replace(pattern,""))
+    return df_Precio_t_1
+
+def obtener_contenido_t_1(region):
+    df = obtener_dataframe(region)
+    df_Contenido_t_1 = df.filter(
+        pl.col('Codigo').str.contains('t-1'))
+    df_Contenido_t_1 = df_Contenido_t_1.filter(
+        pl.col('Unidad de Medida').str.contains('Contenido'))
+    df_Contenido_t_1.write_excel(
+        workbook = wd + region + "/" + region + "_Contenido_t_1.xlsx")
+    word = ' Precio'
+    pattern = f'{word}.*'
+    df_Contenido_t_1 = df_Contenido_t_1.with_columns(
+        pl.col('Codigo').str.replace(pattern,""))
+    word = ' Precio'
+    pattern = f'{word}.*'
+    df_Contenido_t_1 = df_Contenido_t_1.with_columns(
+        pl.col('Codigo').str.replace(pattern,""))
+    return df_Contenido_t_1
+
+def obtener_precio_t(region):
+    df = obtener_dataframe(region)
+    df_Precio_t = df.filter(
+        ~pl.col('Codigo').str.contains('t-1'))
+    df_Precio_t = df_Precio_t.filter(
+        pl.col('Unidad de Medida').str.contains('Precio'))
+    df_Precio_t.write_excel(workbook = wd + region + "/" + region + "_Precio_t.xlsx")
+    word = ' Precio'
+    pattern = f'{word}.*'
+    df_Precio_t = df_Precio_t.with_columns(
+        pl.col('Codigo').str.replace(pattern,""))
+    return df_Precio_t
+
+def obtener_contenido_t(region):
+    df = obtener_dataframe(region)
+    df_Contenido_t = df.filter(
+        ~pl.col('Codigo').str.contains('t-1'))
+    df_Contenido_t = df_Contenido_t.filter(
+        pl.col('Unidad de Medida').str.contains('Contenido'))
+    df_Contenido_t.write_excel(workbook = wd + region + "/" + region + "_Contenido_t.xlsx")
+    word = ' Precio'
+    pattern = f'{word}.*'
+    df_Contenido_t = df_Contenido_t.with_columns(
+        pl.col('Codigo').str.replace(pattern,""))
+    return df_Contenido_t
+```
+
+```{python}
+def obtener_indices(wd,region):
+    # Valores en t
+    p_t = obtener_precio_t(region)
+    my_columns = p_t.columns
+    cols_to_process = my_columns[3:p_t.shape[1]]
+    p_t[cols_to_process] = p_t[cols_to_process].cast(pl.Float64, strict=False)
+    c_t = obtener_contenido_t(region)
+    my_columns = c_t.columns
+    cols_to_process = my_columns[3:c_t.shape[1]]
+    c_t[cols_to_process] = c_t[cols_to_process].cast(pl.Float64, strict=False)
+
+    # Valores en t-1
+    p_t_1 = obtener_precio_t_1(region)
+    my_columns = p_t_1.columns
+    cols_to_process = my_columns[3:p_t_1.shape[1]]
+    p_t_1[cols_to_process] = p_t_1[cols_to_process].cast(pl.Float64, strict=False)
+    c_t_1 = obtener_contenido_t_1(region)
+    my_columns = c_t_1.columns
+    cols_to_process = my_columns[3:c_t_1.shape[1]]
+    c_t_1[cols_to_process] = c_t_1[cols_to_process].cast(pl.Float64, strict=False)
+
+    # Índice de Precios por Establecimiento y Variedad
+    i_t = p_t.clone()
+    i_t[my_columns[3:i_t.shape[1]]] = (p_t[my_columns[3:c_t.shape[1]]] / c_t[my_columns[3:c_t.shape[1]]]) / (p_t_1[my_columns[3:c_t_1.shape[1]]] / c_t_1[my_columns[3:c_t_1.shape[1]]])
+    i_t = i_t.with_columns(pl.lit(region).alias("Región"))
+    i_t.write_excel(
+        workbook = wd + region + "/" + region + "_Establecimiento.xlsx")
+
+    # Índice de Precios por Variedad: Media Geométrica
+    res_variedad = pl.DataFrame([
+        pl.Series("Variedad", my_columns[3:i_t.shape[1]], dtype=pl.String)])
+    res_variedad = res_variedad.with_columns(pl.col("Variedad").str.slice(0, 8).alias("Producto"))
+    res_variedad = res_variedad.with_columns(
+        Indice = 0.0)
+    for row in range(res_variedad.shape[0]):
+        res_variedad[row,2] = geometric_mean(
+            i_t[res_variedad["Variedad"][row]].drop_nans() * 100)
+    res_variedad = res_variedad.with_columns(pl.lit(region).alias("Región"))
+    res_variedad.write_excel(
+        workbook = wd + region + "/" + region + "_Variedad.xlsx")
+
+    # Índice de Precios por Producto: Media Geométrica
+    res_producto = (
+        res_variedad.group_by("Producto", maintain_order=True)
+        .agg(
+            pl.map_groups(
+                exprs=["Indice"],
+                function=geometric_mean)
+        ))
+    res_producto = res_producto.join(
+        ponderaciones_producto_region, 
+        on="Producto")
+    res_producto = res_producto.with_columns(
+        (pl.col("Indice") * pl.col(region) / 100).alias("Indice_Pond"),)
+    res_producto = res_producto.with_columns(pl.lit(region).alias("Región"))
+    res_producto[
+        "Producto","Indice",region,"Indice_Pond"].write_excel(
+        workbook = wd + region + "/" + region + "_Producto.xlsx")
+
+    ## Índice de Precios por Agrupaciones: Media Ponderada
+    grupo = "Categoría"
+    res_categoria = weighted_index_group_region(res_producto,grupo)
+    res_categoria = res_categoria.with_columns(pl.lit(region).alias("Región"))
+    res_categoria.write_excel(
+        workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
+    grupo = "SubClase"
+    res_subclase = weighted_index_group_region(res_producto,grupo)
+    res_subclase = res_subclase.with_columns(pl.lit(region).alias("Región"))
+    res_subclase.write_excel(
+        workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
+    grupo = "Clase"
+    res_subclase = weighted_index_group_region(res_producto,grupo)
+    res_subclase = res_subclase.with_columns(pl.lit(region).alias("Región"))
+    res_subclase.write_excel(
+        workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
+    grupo = "Grupo"
+    res_grupo = weighted_index_group_region(res_producto,grupo)
+    res_grupo = res_grupo.with_columns(pl.lit(region).alias("Región"))
+    res_grupo.write_excel(
+        workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
+    grupo = "División"
+    res_division = weighted_index_group_region(res_producto,grupo)
+    res_division = res_division.with_columns(pl.lit(region).alias("Región"))
+    res_division.write_excel(
+        workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
+
+    # Resultados en DataFrames
+    return p_t, c_t, p_t_1, c_t_1, i_t, res_variedad, res_producto, res_categoria, res_subclase, res_grupo, res_division
+
+# Function to calculate geometric mean
+def geometric_mean(series):
+    return np.exp(np.log(series).mean())
+
+def weighted_index_group_region(df,grupo):
+    result = df.group_by(grupo).agg(
+        [
+            (pl.col("Indice") * pl.col(region) / 100).sum(
+            ).alias("weighted_sum"),
+            pl.col(region).sum(
+            ).alias("Peso_" + grupo)
+        ]).with_columns([
+            (pl.col("weighted_sum") / pl.col("Peso_" + grupo) * 100
+            ).alias("Índice_" + grupo)
+        ]).select([grupo, "Peso_" + grupo, "Índice_" + grupo
+        ]).sort(grupo)
+    result = result.with_columns(
+        (pl.col("Índice_" + grupo) * pl.col("Peso_" + grupo) / 100).alias("Indice_Pond"),
+    )
+    return result
+```
+
+```{python}
+```
+
+# IPC por Elementos
+
+Esta explicación se toma del Manual, para explicar a partir de los elementos mas pequeños: variedades. En dicho manual, a estos se les nombra como **agregados elementales**.
+
+## Construcción de agregados elementales
+
+Los agregados elementales son grupos de bienes y servicios relativamente homogéneos, que pueden abarcar todo el país o solo regiones individuales. Asimismo, pueden establecerse distintos agregados elementales para distintos tipos de puntos de venta. L
+
+Para su escogencia se tienen en cuenta los siguientes elementos:
+
+- Los agregados elementales deberían componerse de grupos de bienes o servicios tan parecidos entre sí como sea posible y, preferentemente, homogéneos.
+- Deberían estar compuestos de artículos de los cuales se esperan variaciones de precios parecidas, a efectos de minimizar la dispersión de las variaciones de precios dentro del agregado. 
+- Los agregados elementales deberían ser apropiados para servir como estratos para propósito de muestreo en función del régimen de muestreo que se establezca para la recopilación de datos.
+
+Utilizando una clasificación de los gastos del consumidor como la Clasificación del Consumo Individual por Finalidades (CCIF), todo el conjunto de bienes y servicios de consumo que abarca el IPC nivel general puede dividirse en **grupos**, por ejemplo "comestibles y bebidas no alcohólicas". Cada grupo se divide a su vez en **clases**, por ejemplo, "comestibles". A los fines del IPC, cada clase puede dividirse a su vez en **subclases** más homogéneas, como "arroz". Las subclases equivalen a los capítulos del Programa de Comparación Internacional, que calcula las paridades de poder adquisitivo (PPA) entre países. Finalmente, la subclase puede descomponerse aún más para obtener agregados elementales por regiones o puntos de venta.
+
+Para Honduras, a partir del código CCIF, se tienen productos por CCIF agrupados por:
+
+- Producto: CCIF a 8 dígitos;
+- Categoría: CCIF a 6 dígitos;
+- Subclase: CCIF a 5 dígitos;
+- Clase: CCIF a 4 dígitos;
+- Grupo: CCIF a 3 dígitos; y
+- División: CCIF a 2 dígitos.
+
+Las ponderaciones por producto son distintas por cada región:
+
+- MDC = Metropolitana Distrito Central
+- RUC = Resto Urbano Central
+- MSPS =  Metropolitana San Pedro Sula
+- RUN = Resto Urbano Norte
+- ULA = Urbana Litoral Atlántico
+- UOri = Urbana Oriental
+- UOcc = Urbana Occidental
+- US = Urbana Sur
+
+En la tabla se muestran los datos de los primeros 5 productos con sus respectivas ponderaciones por región.
+
+```{python}
+regions = ["MDC","RUC","MSPS","RUN","ULA","UOri","UOcc","US"]
+ponderaciones_producto_region = get_ponds_from_xlsx()
+GT(ponderaciones_producto_region[0:5,:]
+    ).fmt_number(columns=regions, decimals=4)
+```
+
+Dentro de cada agregado elemental se seleccionan uno o más artículos para representar todos los artículos pertenecientes a él. Por ejemplo, el agregado elemental compuesto por arroz en venta en supermercados del norte del país cubre todos los tipos de arroz, de los cuales se seleccionan como artículos representativos el arroz blanco precocido y el integral con más del 50% de granos partidos. Desde luego, en la práctica puede seleccionarse una mayor cantidad de artículos representativos. Finalmente, por cada uno puede seleccionarse una cantidad de productos específicos para la recopilación de precios, por ejemplo determinadas marcas de arroz precocido. Nuevamente, la cantidad de productos seleccionados para la muestra dependerá de la naturaleza del
+producto representativo.
+
+Un ejemplo para Honduras, correspondiente al arroz clasificado (CCIF= 01111201) en MDC es:
+
+```{python}
+region = "MDC"
+p_t, c_t, p_t_1, c_t_1, i_t, res_variedad, res_producto, res_categoria, res_subclase, res_grupo, res_division = obtener_indices(wd,region)
+```
+
+```{python}
+GT(p_t[:,0:6].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
+
+Puede observarse que este producto tiene tres subclasificaciones o variedades:
+
+- 01111201.01	Arroz clasificado;
+- 01111201.02	Arroz corriente; y
+- 01111201.03	Arroz precocido.
+
+Además, se consultan precios en dos tipos de establecimiento:
+
+- Supermercado (Yip's y La Colonia # 1); y
+- Mercadito (Los almendros y 5 estrellas)
+
+A continuación se analizan los métodos utilizados para calcular índices elementales a partir de observaciones sobre precios individuales. Todos los índices de nivel superior por encima del nivel agregado elemental se obtienen a partir de los índices de precios elementales utilizando como ponderaciones los agregados elementales de gastos. 
+
+La estructura de agregación es consistente, de manera que la ponderación de cada nivel por encima del agregado elemental siempre es igual a la suma de sus componentes. El índice de precios en cada nivel superior de agregación se calcula sobre la base de las ponderaciones y los índices de precios de sus componentes, es decir, los índices de nivel inferior o elementales.
+
+Los índices de precios elementales individuales pueden no ser lo suficientemente confiables para publicarlos por separado, aunque sirven para construir todos los índices de nivel superior.
+
+En la mayoría de los casos, los índices de precios de los agregados elementales se calculan sin utilizar ponderaciones de gasto explícitas. Sin embargo, en la medida de lo posible, deberían utilizarse ponderaciones que reflejen la importancia relativa de los artículos incluidos en la muestra, aun si las ponderaciones son solo aproximadas. 
+
+A menudo, el agregado elemental es sencillamente el nivel más bajo respecto del cual se dispone de información confiable. En este caso, el índice elemental debe calcularse como el promedio no ponderado de los precios que lo componen. 
+
+## Construcción de índices de precios elementales
+
+Un índice de precios elemental es un índice de precios de un agregado elemental. En el ejemplo se supone que para el agregado elemental se recopilan los precios de cuatro artículos. La calidad de cada artículo permanece constante a lo largo del tiempo a efectos de asegurar que las variaciones de un mes a otro representen una comparación entre semejantes. 
+
+Inicialmente se supone que los precios de los cuatro artículos se recopilan todos los meses, con lo cual se dispone de un conjunto completo de precios. No desaparece ningún artículo ni falta ningún precio, y tampoco hay artículos de reemplazo. Se trata de un supuesto bastante fuerte, pues muchos de los problemas que surgen en la práctica se deben a rupturas en la continuidad de la serie de precios de los artículos individuales, por cualquier motivo. 
+
+# Índices 
+
+# Lowe:
+
+El período cuyas cantidades efectivamente se utilizan en el IPC se conoce como *período de referencia de las ponderaciones*, y se denotará como período $b$. El período 0 es el período de referencia de los precios.
+
+Sea $n$ la cantidad de productos en una canasta con precios $p_i$ y cantidades $q_i$, y sean 0 y $t$ los dos períodos que se comparan. 
+
+El índice de Lowe $P_{Lo}$ para el producto $i$ de la región $r$ se define de la siguiente manera:
+
+$P_{Lo}=\frac{\sum_{i=1}^n p_i^t q_i}{\sum_{i=1}^n p_0^t q_i}$
+
+El índice de Lowe que utiliza las cantidades del período $b$ puede expresarse de la siguiente forma:
+
+$P_{Lo}=\frac{\sum_{i=1}^n p_i^t q_i^b}{\sum_{i=1}^n p_i^0 q_i^b}$
+
+$P_{Lo}=\sum_{i=1}^n \frac{p_i^t}{p_i^0} s_i^{0b}$
+
+donde
+
+$s_i^{0b}=\frac{p_i^0q_i^b}{\sum_{i=1}^n p_i^0q_i^b}$
+
+2. Índice de Precios por Establecimiento (e) y Variedad (V)
+
+$i_{ev}^r = \frac{\frac{p_{ev,t}^r}{c_{ev,t}^r}}{\frac{p_{ev,t-1}^r}{c_{ev,t-1}^r}}$
+
+3. Índice de Precios por Variedad: Media Geométrica
+
+$i_V^r = \sqrt[n]{{i_{ev_1}^r,i_{ev_2}^r,...,i_{ev_n}^r}} \text{ for v in } V^r$
+
+$i_V^r = \exp (\frac{{\ln i_{ev_1}^r + \ln i_{ev_2}^r +...+\ln i_{ev_n}^r}}{n}) \text{ for v in } V^r$
+
+4. Índice de Precios por Producto (X): Media Geométrica
+
+$i_X^r = \sqrt[n]{{i_{V_1}^r,i_{V_2}^r,...,i_{V_n}^r}} \text{ for V in } X^r$
+
+$i_X^r = \exp (\frac{{\ln i_{V_1}^r + \ln i_{V_2}^r +...+\ln i_{V_n}^r}}{n}) \text{ for V in } X^r$
+
+$Indice\_Pond^r$ = $i_X^r * w_X^r$
+
+$IPC^r$ = $\sum{Indice\_Pond^r}$
+
+$w_A^r = \frac{w_X^r}{\sum w_X^r} \text{ for X in } A^r$
+
+$i_A^r = \sum i_X^r * \frac{w_X^r}{w_A^r} \text{ for X in } A^r$
