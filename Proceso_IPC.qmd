@@ -179,6 +179,19 @@ def obtener_precio_t_1(region):
         pl.col('Codigo').str.replace(pattern,""))
     return df_Precio_t_1
 
+def obtener_precio_t(region):
+    df = obtener_dataframe(region)
+    df_Precio_t = df.filter(
+        ~pl.col('Codigo').str.contains('t-1'))
+    df_Precio_t = df_Precio_t.filter(
+        pl.col('Unidad de Medida').str.contains('Precio'))
+    df_Precio_t.write_excel(workbook = wd + region + "/" + region + "_Precio_t.xlsx")
+    word = ' Precio'
+    pattern = f'{word}.*'
+    df_Precio_t = df_Precio_t.with_columns(
+        pl.col('Codigo').str.replace(pattern,""))
+    return df_Precio_t
+
 def obtener_contenido_t_1(region):
     df = obtener_dataframe(region)
     df_Contenido_t_1 = df.filter(
@@ -197,19 +210,6 @@ def obtener_contenido_t_1(region):
         pl.col('Codigo').str.replace(pattern,""))
     return df_Contenido_t_1
 
-def obtener_precio_t(region):
-    df = obtener_dataframe(region)
-    df_Precio_t = df.filter(
-        ~pl.col('Codigo').str.contains('t-1'))
-    df_Precio_t = df_Precio_t.filter(
-        pl.col('Unidad de Medida').str.contains('Precio'))
-    df_Precio_t.write_excel(workbook = wd + region + "/" + region + "_Precio_t.xlsx")
-    word = ' Precio'
-    pattern = f'{word}.*'
-    df_Precio_t = df_Precio_t.with_columns(
-        pl.col('Codigo').str.replace(pattern,""))
-    return df_Precio_t
-
 def obtener_contenido_t(region):
     df = obtener_dataframe(region)
     df_Contenido_t = df.filter(
@@ -222,29 +222,55 @@ def obtener_contenido_t(region):
     df_Contenido_t = df_Contenido_t.with_columns(
         pl.col('Codigo').str.replace(pattern,""))
     return df_Contenido_t
+
+def obtener_precio_unitario(region):
+    df_Precio_t_1 = obtener_precio_t_1(region)
+    df_Precio_t = obtener_precio_t(region)
+    df_Contenido_t_1 = obtener_contenido_t_1(region)
+    df_Contenido_t = obtener_contenido_t(region)
+    # df_Precio_Unitario_t_1 = obtener_precio_t_1(region)
+    # df_Precio_Unitario_t = obtener_precio_t(region)
+    ##### Precio Unitario en t-1
+    my_columns = df_Precio_t_1.columns
+    cols_to_process = my_columns[3:df_Precio_t_1.shape[1]]
+    return df_Precio_t_1,df_Precio_t,df_Contenido_t_1,df_Contenido_t
 ```
 
 ```{python}
 def obtener_indices(wd,region):
-    # Valores en t
+    # Precios en t
     p_t = obtener_precio_t(region)
     my_columns = p_t.columns
     cols_to_process = my_columns[3:p_t.shape[1]]
     p_t[cols_to_process] = p_t[cols_to_process].cast(pl.Float64, strict=False)
+    # Contenidos en t
     c_t = obtener_contenido_t(region)
     my_columns = c_t.columns
     cols_to_process = my_columns[3:c_t.shape[1]]
     c_t[cols_to_process] = c_t[cols_to_process].cast(pl.Float64, strict=False)
+    # Precios Unitarios en t
+    pu_t = p_t.clone()
+    pu_t[my_columns[3:pu_t.shape[1]]] = (p_t[my_columns[3:c_t.shape[1]]] / c_t[my_columns[3:c_t.shape[1]]])
+    pu_t = pu_t.with_columns(pl.lit(region).alias("Región"))
+    pu_t.write_excel(
+        workbook = wd + region + "/" + region + "_Precio_Unitario_t.xlsx")
 
-    # Valores en t-1
+    # Precios en t-1
     p_t_1 = obtener_precio_t_1(region)
     my_columns = p_t_1.columns
     cols_to_process = my_columns[3:p_t_1.shape[1]]
     p_t_1[cols_to_process] = p_t_1[cols_to_process].cast(pl.Float64, strict=False)
+    # Contenidos en t-1
     c_t_1 = obtener_contenido_t_1(region)
     my_columns = c_t_1.columns
     cols_to_process = my_columns[3:c_t_1.shape[1]]
     c_t_1[cols_to_process] = c_t_1[cols_to_process].cast(pl.Float64, strict=False)
+    # Precios Unitarios en t-1
+    pu_t_1 = p_t.clone()
+    pu_t_1[my_columns[3:pu_t_1.shape[1]]] = (p_t_1[my_columns[3:c_t.shape[1]]] / c_t_1[my_columns[3:c_t.shape[1]]])
+    pu_t_1 = pu_t_1.with_columns(pl.lit(region).alias("Región"))
+    pu_t_1.write_excel(
+        workbook = wd + region + "/" + region + "_Precio_Unitario_t_1.xlsx")
 
     # Índice de Precios por Establecimiento y Variedad
     i_t = p_t.clone()
@@ -312,7 +338,7 @@ def obtener_indices(wd,region):
         workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
 
     # Resultados en DataFrames
-    return p_t, c_t, p_t_1, c_t_1, i_t, res_variedad, res_producto, res_categoria, res_subclase, res_grupo, res_division
+    return p_t, c_t, p_t_1, c_t_1, pu_t, pu_t_1, i_t, res_variedad, res_producto, res_categoria, res_subclase, res_grupo, res_division
 
 # Function to calculate geometric mean
 def geometric_mean(series):
@@ -381,7 +407,7 @@ Para detallar cada dataframe y archivo de Excel resultante, se usará como ejemp
 
 ```{python}
 region = "MDC"
-p_t, c_t, p_t_1, c_t_1, i_t, res_variedad, res_producto, res_categoria, res_subclase, res_grupo, res_division = obtener_indices(wd,region)
+p_t, c_t, p_t_1, c_t_1, pu_t, pu_t_1, i_t, res_variedad, res_producto, res_categoria, res_subclase, res_grupo, res_division = obtener_indices(wd,region)
 ```
 
 ### 1. Precios y Contenido en t, t-1

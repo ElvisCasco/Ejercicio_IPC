@@ -11,18 +11,18 @@ format:
   #   toc: true
   #   code-fold: true
   docx: 
+    toc: true
+    # reference-doc: custom-reference.docx
+    # css: styles.css
     documentclass: report
     # classoption: landscape
-    geometry:
-      - top=5mm
-      - left=1mm
-      - right=1mm
+    geometry: "top=1in, bottom=1in, left=0.5in, right=0.1in"
+    # pandoc-args: ["--variable", "geometry:margin=0.5in"]
     echo: false
     warnings: false
     keep-ipynb: true
 jupyter: python3
 ---
-
 
 ```{python}
 # %pip install --upgrade polars
@@ -221,25 +221,39 @@ def obtener_contenido_t(region):
 
 ```{python}
 def obtener_indices(wd,region):
-    # Valores en t
+    # Precios en t
     p_t = obtener_precio_t(region)
     my_columns = p_t.columns
     cols_to_process = my_columns[3:p_t.shape[1]]
     p_t[cols_to_process] = p_t[cols_to_process].cast(pl.Float64, strict=False)
+    # Contenidos en t
     c_t = obtener_contenido_t(region)
     my_columns = c_t.columns
     cols_to_process = my_columns[3:c_t.shape[1]]
     c_t[cols_to_process] = c_t[cols_to_process].cast(pl.Float64, strict=False)
+    # Precios Unitarios en t
+    pu_t = p_t.clone()
+    pu_t[my_columns[3:pu_t.shape[1]]] = (p_t[my_columns[3:c_t.shape[1]]] / c_t[my_columns[3:c_t.shape[1]]])
+    pu_t = pu_t.with_columns(pl.lit(region).alias("Región"))
+    pu_t.write_excel(
+        workbook = wd + region + "/" + region + "_Precio_Unitario_t.xlsx")
 
-    # Valores en t-1
+    # Precios en t-1
     p_t_1 = obtener_precio_t_1(region)
     my_columns = p_t_1.columns
     cols_to_process = my_columns[3:p_t_1.shape[1]]
     p_t_1[cols_to_process] = p_t_1[cols_to_process].cast(pl.Float64, strict=False)
+    # Contenidos en t-1
     c_t_1 = obtener_contenido_t_1(region)
     my_columns = c_t_1.columns
     cols_to_process = my_columns[3:c_t_1.shape[1]]
     c_t_1[cols_to_process] = c_t_1[cols_to_process].cast(pl.Float64, strict=False)
+    # Precios Unitarios en t-1
+    pu_t_1 = p_t.clone()
+    pu_t_1[my_columns[3:pu_t_1.shape[1]]] = (p_t_1[my_columns[3:c_t.shape[1]]] / c_t_1[my_columns[3:c_t.shape[1]]])
+    pu_t_1 = pu_t_1.with_columns(pl.lit(region).alias("Región"))
+    pu_t_1.write_excel(
+        workbook = wd + region + "/" + region + "_Precio_Unitario_t_1.xlsx")
 
     # Índice de Precios por Establecimiento y Variedad
     i_t = p_t.clone()
@@ -261,7 +275,16 @@ def obtener_indices(wd,region):
     res_variedad.write_excel(
         workbook = wd + region + "/" + region + "_Variedad.xlsx")
 
+    # Ponderación por Región
+    Pond_Region = pl.read_excel(
+        source = wd + "Categorias.xlsx",
+        sheet_name = "Zonas",
+        infer_schema_length=None)
+    Pond_Region = Pond_Region[:,0:2]
+    Pond_Region
+
     # Índice de Precios por Producto: Media Geométrica
+    pond_region = Pond_Region.filter(pl.col("Región") == region)[0,0]
     res_producto = (
         res_variedad.group_by("Producto", maintain_order=True)
         .agg(
@@ -269,45 +292,55 @@ def obtener_indices(wd,region):
                 exprs=["Indice"],
                 function=geometric_mean)
         ))
+    ponderaciones_producto_region = get_ponds_from_xlsx()
     res_producto = res_producto.join(
         ponderaciones_producto_region, 
         on="Producto")
     res_producto = res_producto.with_columns(
-        (pl.col("Indice") * pl.col(region) / 100).alias("Indice_Pond"),)
+        (pl.col("Indice") * pl.col(region) / 100).alias("Indice_Pond_Producto_Región"))
+    res_producto = res_producto.with_columns(
+        (pl.col(region)).alias("Pond_Producto_Region"))
     res_producto = res_producto.with_columns(pl.lit(region).alias("Región"))
-    res_producto[
-        "Producto","Indice",region,"Indice_Pond"].write_excel(
+    res_producto = res_producto.with_columns(pl.lit(pond_region).alias("Pond_Región"))
+    res_producto = res_producto.with_columns(
+        (pl.col("Pond_Producto_Region") * pl.col("Pond_Región")).alias("Pond_IPC"))
+    res_producto = res_producto.with_columns(
+        (pl.col("Indice") * pl.col("Pond_IPC") / 100).alias("Indice_Pond_Producto_IPC"))
+    res_producto = res_producto[
+        "Producto","CCIF","División","Grupo","Clase","SubClase","Categoría","Región","Pond_Región","Pond_Producto_Region","Pond_IPC","Indice","Indice_Pond_Producto_Región","Indice_Pond_Producto_IPC"]
+    res_producto.write_excel(
         workbook = wd + region + "/" + region + "_Producto.xlsx")
 
     ## Índice de Precios por Agrupaciones: Media Ponderada
+    agrupaciones = ["Categoría","SubClase","Clase","Grupo","División"]
     grupo = "Categoría"
     res_categoria = weighted_index_group_region(res_producto,grupo)
     res_categoria = res_categoria.with_columns(pl.lit(region).alias("Región"))
     res_categoria.write_excel(
-        workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
+        workbook = wd + grupo + "/" + region + "_" + grupo + ".xlsx")
     grupo = "SubClase"
     res_subclase = weighted_index_group_region(res_producto,grupo)
     res_subclase = res_subclase.with_columns(pl.lit(region).alias("Región"))
     res_subclase.write_excel(
-        workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
+        workbook = wd + grupo + "/" + region + "_" + grupo + ".xlsx")
     grupo = "Clase"
-    res_subclase = weighted_index_group_region(res_producto,grupo)
-    res_subclase = res_subclase.with_columns(pl.lit(region).alias("Región"))
-    res_subclase.write_excel(
-        workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
+    res_clase = weighted_index_group_region(res_producto,grupo)
+    res_clase = res_subclase.with_columns(pl.lit(region).alias("Región"))
+    res_clase.write_excel(
+        workbook = wd + grupo + "/" + region + "_" + grupo + ".xlsx")
     grupo = "Grupo"
     res_grupo = weighted_index_group_region(res_producto,grupo)
     res_grupo = res_grupo.with_columns(pl.lit(region).alias("Región"))
     res_grupo.write_excel(
-        workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
+        workbook = wd + grupo + "/" + region + "_" + grupo + ".xlsx")
     grupo = "División"
     res_division = weighted_index_group_region(res_producto,grupo)
     res_division = res_division.with_columns(pl.lit(region).alias("Región"))
     res_division.write_excel(
-        workbook = wd + region +"/" + region + "_" + grupo + ".xlsx")
+        workbook = wd + grupo + "/" + region + "_" + grupo + ".xlsx")
 
     # Resultados en DataFrames
-    return p_t, c_t, p_t_1, c_t_1, i_t, res_variedad, res_producto, res_categoria, res_subclase, res_grupo, res_division
+    return p_t,c_t,p_t_1,c_t_1,pu_t,pu_t_1,i_t,res_variedad,res_producto,res_categoria,res_subclase,res_clase,res_grupo,res_division
 
 # Function to calculate geometric mean
 def geometric_mean(series):
@@ -316,31 +349,44 @@ def geometric_mean(series):
 def weighted_index_group_region(df,grupo):
     result = df.group_by(grupo).agg(
         [
-            (pl.col("Indice") * pl.col(region) / 100).sum(
+            (pl.col("Indice") * pl.col("Pond_Producto_Region") / 100).sum(
             ).alias("weighted_sum"),
-            pl.col(region).sum(
+            pl.col("Pond_Producto_Region").sum(
             ).alias("Peso_" + grupo)
         ]).with_columns([
             (pl.col("weighted_sum") / pl.col("Peso_" + grupo) * 100
             ).alias("Índice_" + grupo)
         ]).select([grupo, "Peso_" + grupo, "Índice_" + grupo
         ]).sort(grupo)
+    result = result.with_columns(pl.lit(region).alias("Región"))
     result = result.with_columns(
-        (pl.col("Índice_" + grupo) * pl.col("Peso_" + grupo) / 100).alias("Indice_Pond"),
+        (pl.col("Índice_" + grupo) * pl.col("Peso_" + grupo) / 100).alias("Indice_Pond_Region"),
     )
     return result
 ```
 
 ```{python}
+# regions = ["MDC","RUC","MSPS","RUN","ULA","UOri","UOcc","US"]
+# for i, region in enumerate(regions):
+#     res = obtener_indices(wd,region)
+
+region = "MDC"
+p_t,c_t,p_t_1,c_t_1,pu_t,pu_t_1,i_t,res_variedad,res_producto, res_categoria, res_subclase, res_clase, res_grupo, res_division = obtener_indices(wd,region)
+res_producto
+grupo = "División"
+result =weighted_index_group_region(res_producto,grupo)
+result
 ```
 
-# IPC por Elementos
+**Nota:** La explicación de los cálculos se toma del Manual, partiendo de los elementos mas pequeños: variedades por establecimiento. En dicho manual, a estos se les nombra como **agregados elementales**.
 
-Esta explicación se toma del Manual, para explicar a partir de los elementos mas pequeños: variedades. En dicho manual, a estos se les nombra como **agregados elementales**.
+{{< pagebreak >}}
+
+# Índices, agregados elementales
 
 ## Construcción de agregados elementales
 
-Los agregados elementales son grupos de bienes y servicios relativamente homogéneos, que pueden abarcar todo el país o solo regiones individuales. Asimismo, pueden establecerse distintos agregados elementales para distintos tipos de puntos de venta. L
+Los agregados elementales son grupos de bienes y servicios relativamente homogéneos, que pueden abarcar todo el país o solo regiones individuales. Asimismo, pueden establecerse distintos agregados elementales para distintos tipos de puntos de venta.
 
 Para su escogencia se tienen en cuenta los siguientes elementos:
 
@@ -349,6 +395,39 @@ Para su escogencia se tienen en cuenta los siguientes elementos:
 - Los agregados elementales deberían ser apropiados para servir como estratos para propósito de muestreo en función del régimen de muestreo que se establezca para la recopilación de datos.
 
 Utilizando una clasificación de los gastos del consumidor como la Clasificación del Consumo Individual por Finalidades (CCIF), todo el conjunto de bienes y servicios de consumo que abarca el IPC nivel general puede dividirse en **grupos**, por ejemplo "comestibles y bebidas no alcohólicas". Cada grupo se divide a su vez en **clases**, por ejemplo, "comestibles". A los fines del IPC, cada clase puede dividirse a su vez en **subclases** más homogéneas, como "arroz". Las subclases equivalen a los capítulos del Programa de Comparación Internacional, que calcula las paridades de poder adquisitivo (PPA) entre países. Finalmente, la subclase puede descomponerse aún más para obtener agregados elementales por regiones o puntos de venta.
+
+A continuación se analizan los métodos utilizados para calcular índices elementales a partir de observaciones sobre precios individuales. Todos los índices de nivel superior por encima del nivel agregado elemental se obtienen a partir de los índices de precios elementales utilizando como ponderaciones los agregados elementales de gastos. 
+
+La estructura de agregación es consistente, de manera que la ponderación de cada nivel por encima del agregado elemental siempre es igual a la suma de sus componentes. El índice de precios en cada nivel superior de agregación se calcula sobre la base de las ponderaciones y los índices de precios de sus componentes, es decir, los índices de nivel inferior o elementales.
+
+Los índices de precios elementales individuales pueden no ser lo suficientemente confiables para publicarlos por separado, aunque sirven para construir todos los índices de nivel superior.
+
+En la mayoría de los casos, los índices de precios de los agregados elementales se calculan sin utilizar ponderaciones de gasto explícitas. Sin embargo, en la medida de lo posible, deberían utilizarse ponderaciones que reflejen la importancia relativa de los artículos incluidos en la muestra, aun si las ponderaciones son solo aproximadas. 
+
+A menudo, el agregado elemental es sencillamente el nivel más bajo respecto del cual se dispone de información confiable. En este caso, el índice elemental debe calcularse como el promedio no ponderado de los precios que lo componen. 
+
+## Construcción de índices de precios elementales
+
+Un índice de precios elemental es un índice de precios de un agregado elemental. En el ejemplo se supone que para el agregado elemental se recopilan los precios de cuatro artículos. La calidad de cada artículo permanece constante a lo largo del tiempo a efectos de asegurar que las variaciones de un mes a otro representen una comparación entre semejantes. 
+
+Inicialmente se supone que los precios de los cuatro artículos se recopilan todos los meses, con lo cual se dispone de un conjunto completo de precios. No desaparece ningún artículo ni falta ningún precio, y tampoco hay artículos de reemplazo. Se trata de un supuesto bastante fuerte, pues muchos de los problemas que surgen en la práctica se deben a rupturas en la continuidad de la serie de precios de los artículos individuales, por cualquier motivo. 
+
+Tres fórmulas muy utilizadas por las oficinas de estadística para calcular los índices de precios elementales. Sin embargo, cabe tener en cuenta que no constituyen las únicas posibilidades y más adelante se consideran algunas fórmulas alternativas.
+
+1. **Índice de Carli** para $i = 1,..., n$ artículos. Se define como la media aritmética simple, o no ponderada, de los cocientes relativos de precios, o cocientes de precios, de los dos períodos, 0 y t, que se comparan:
+
+$I^{0:t}_C=\frac{1}{n}\sum (\frac{p_i^t}{p_i^0})$
+
+2. **Índice de Dutot**, que se define como el cociente de las medias aritméticas no ponderadas de los precios:
+
+$I^{0:t}_D=\frac{\frac{1}{n}\sum p_i^t}{\frac{1}{n}\sum p_i^0}$
+
+3. **Índice de Jevons**, que se define como la media geométrica no ponderada de los relativos de precios o cocientes, que es idéntica al cociente de las medias geométricas simples de los precios:
+
+$I^{0:t}_J=\prod (\frac{p_i^t}{p_i^0})^{\frac{1}{n}} = \frac{\prod (p_i^t)^{\frac{1}{n}}}{\prod (p_i^0)^{\frac{1}{n}}}$
+
+## Ejemplo de procedimiento para índices de precios elementales: Arroz Clasificado, Región MDC
+
 
 Para Honduras, a partir del código CCIF, se tienen productos por CCIF agrupados por:
 
@@ -386,7 +465,7 @@ Un ejemplo para Honduras, correspondiente al arroz clasificado (CCIF= 01111201) 
 
 ```{python}
 region = "MDC"
-p_t, c_t, p_t_1, c_t_1, i_t, res_variedad, res_producto, res_categoria, res_subclase, res_grupo, res_division = obtener_indices(wd,region)
+p_t, c_t, p_t_1, c_t_1, pu_t, pu_t_1, i_t, res_variedad, res_producto, res_categoria, res_subclase, res_grupo, res_division = obtener_indices(wd,region)
 ```
 
 ```{python}
@@ -395,7 +474,7 @@ GT(p_t[:,0:6].filter(
 ))
 ```
 
-Puede observarse que este producto tiene tres subclasificaciones o variedades:
+Este producto tiene tres subclasificaciones o variedades:
 
 - 01111201.01	Arroz clasificado;
 - 01111201.02	Arroz corriente; y
@@ -406,37 +485,126 @@ Además, se consultan precios en dos tipos de establecimiento:
 - Supermercado (Yip's y La Colonia # 1); y
 - Mercadito (Los almendros y 5 estrellas)
 
-A continuación se analizan los métodos utilizados para calcular índices elementales a partir de observaciones sobre precios individuales. Todos los índices de nivel superior por encima del nivel agregado elemental se obtienen a partir de los índices de precios elementales utilizando como ponderaciones los agregados elementales de gastos. 
+El componente más pequeño que se definió es la variedad, misma que contiene datos de **precios** y **contenido** (conversión a unidad de medida); el **precio unitario** se obtiene mediante la división de los elementos de estas tablas.
 
-La estructura de agregación es consistente, de manera que la ponderación de cada nivel por encima del agregado elemental siempre es igual a la suma de sus componentes. El índice de precios en cada nivel superior de agregación se calcula sobre la base de las ponderaciones y los índices de precios de sus componentes, es decir, los índices de nivel inferior o elementales.
+### 1. Precios en t, por establecimiento y producto:
 
-Los índices de precios elementales individuales pueden no ser lo suficientemente confiables para publicarlos por separado, aunque sirven para construir todos los índices de nivel superior.
+```{python}
+GT(p_t[:,0:6].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
 
-En la mayoría de los casos, los índices de precios de los agregados elementales se calculan sin utilizar ponderaciones de gasto explícitas. Sin embargo, en la medida de lo posible, deberían utilizarse ponderaciones que reflejen la importancia relativa de los artículos incluidos en la muestra, aun si las ponderaciones son solo aproximadas. 
+### 2. Contenido en t, por establecimiento y producto:
 
-A menudo, el agregado elemental es sencillamente el nivel más bajo respecto del cual se dispone de información confiable. En este caso, el índice elemental debe calcularse como el promedio no ponderado de los precios que lo componen. 
+```{python}
+GT(c_t[:,0:6].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
 
-## Construcción de índices de precios elementales
+### 3. Precios unitarios (Precios / Contenido) en t, por establecimiento y producto:
 
-Un índice de precios elemental es un índice de precios de un agregado elemental. En el ejemplo se supone que para el agregado elemental se recopilan los precios de cuatro artículos. La calidad de cada artículo permanece constante a lo largo del tiempo a efectos de asegurar que las variaciones de un mes a otro representen una comparación entre semejantes. 
+```{python}
+GT(pu_t[:,0:6].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
 
-Inicialmente se supone que los precios de los cuatro artículos se recopilan todos los meses, con lo cual se dispone de un conjunto completo de precios. No desaparece ningún artículo ni falta ningún precio, y tampoco hay artículos de reemplazo. Se trata de un supuesto bastante fuerte, pues muchos de los problemas que surgen en la práctica se deben a rupturas en la continuidad de la serie de precios de los artículos individuales, por cualquier motivo. 
+### 4. Precios en t-1, por establecimiento y producto:
 
-Tres fórmulas muy utilizadas por las oficinas de estadística para calcular los índices de precios elementales. Sin embargo, cabe tener en cuenta que no constituyen las únicas posibilidades y más adelante se consideran algunas fórmulas alternativas.
+```{python}
+GT(p_t_1[:,0:6].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
 
-1. Índice de Carli para $i = 1,..., n$ artículos. Se define como la media aritmética simple, o no ponderada, de los cocientes relativos de precios, o cocientes de precios, de los dos períodos, 0 y t, que se comparan:
+### 5. Contenido en t-1, por establecimiento y producto:
 
-$I^{0:t_C}=\frac{1}{n}\sum (\frac{p_i^t}{p_i^0})$
+```{python}
+GT(c_t_1[:,0:6].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
 
-2. Índice de Dutot, que se define como el cociente de las medias aritméticas no ponderadas de los precios:
+### 6. Precios unitarios (Precios / Contenido) en t-1, por establecimiento y producto:
 
-$I^{0:t_D}=\frac{\frac{1}{n}\sum p_i^t}{\frac{1}{n}\sum p_i^0}$
+```{python}
+GT(pu_t_1[:,0:6].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
 
-3. Índice de Jevons, que se define como la media geométrica no ponderada de los relativos de precios o cocientes, que es idéntica al cociente de las medias geométricas simples de los precios:
+### 7. Índices individuales en t, por establecimiento y producto  (Índice de Carli): 
 
-$I_J^{0:t}=\prod (\frac{p_i^t}{p_i^0})^{\frac{1}{n}} = \frac{\prod p_i^t^{\frac{1}{n}}}{\prod p_i^0^{\frac{1}{n}}}$
+Precio unitario en t / Precio Unitario en t-1
 
-$i_V^r = \sqrt[n]{{i_{ev_1}^r,i_{ev_2}^r,...,i_{ev_n}^r}} \text{ for v in } V^r$
+$I^{0:t}_C=\frac{1}{n}\sum (\frac{p_i^t}{p_i^0})$
+
+```{python}
+GT(i_t[:,0:6].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
+
+### 8. Índice en t, por variedad (Índice de Jevons):
+
+Media geométrica de los Índices individuales en t, por establecimiento y producto (por cada columna, en la tabla anterior).
+
+$I^{0:t}_{Jv}=\prod (\frac{p_i^t}{p_i^0})^{\frac{1}{n}} = \frac{\prod (p_i^t)^{\frac{1}{n}}}{\prod (p_i^0)^{\frac{1}{n}}}$
+
+```{python}
+GT(res_variedad[0:3,:].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
+
+### 9. Índice en t, por producto:
+
+Media geométrica de los Índices individuales en t, por variedad.
+
+$I^{0:t}_{Jp}=\prod (I_{Jv1}^{0:t},I_{Jv2}^{0:t},...,I_{Jvn}^{0:t})^\frac{1}{n}$
+
+$I^{0:t}_{Jp}= \exp \bigg(\frac{{\ln (I_{Jv1}^{0:t}) + \ln (I_{Jv2}^{0:t}) +...+\ln (I_{Jvn}^{0:t})}}{n}\bigg)$
+
+
+```{python}
+GT(res_producto[0:1,0:10].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
+
+# Cálculo de índices de nivel superior
+
+Las oficinas de estadística deben apuntar a algún índice objetivo o meta. Para ello  deben considerar qué tipo de índice elaborarían en una situación hipotética ideal en que contaran con toda la información necesaria sobre los precios y las cantidades en los dos períodos comparados. 
+
+Si el IPC tiene por finalidad servir de índice del costo de vida, un índice superlativo de tipo Fisher, Walsh o Törnqvist-Theil serviría como objetivo teórico, pues se espera que un índice superlativo se aproxime al índice del costo de vida subyacente.
+
+Muchos países intentan calcular un índice del costo de vida y prefieren el concepto de índice basado en una canasta. Un índice basado en una canasta mide la variación en el valor total de una determinada canasta de bienes y servicios entre dos períodos. En este manual, esta categoría general de índice se define como un índice de Lowe.
+
+En teoría puede elegirse cualquier índice objetivo. En la práctica, es probable que se prefiera un índice de Laspeyres o cualquier otro índice superlativo.
+
+## Índices de precios al consumidor como promedios ponderados de índices elementales
+
+Un índice de nivel superior es un índice de determinado agregado de gasto por encima del nivel de un agregado elemental como, por ejemplo, el IPC nivel general. Los datos que se utilizan para calcular índices de nivel superior son:
+
+– Los índices de precios elementales.
+– Las ponderaciones obtenidas de los valores de agregados elementales en varios años anteriores.
+
+Los índices de nivel superior se calculan simplemente como promedios aritméticos ponderados de los índices de precios elementales. Esta categoría general de índice se define en este manual como índice de Young.
+
+La segunda etapa de la elaboración del IPC no comprende precios ni cantidades individuales. Por el contrario, un índice de nivel superior es un índice de Young en el cual los índices de precios elementales se promedian utilizando un conjunto de ponderaciones predeterminadas.
+
+La fórmula puede plantearse de la siguiente manera:
+
+$I^{0:t}=\sum w^b_i I^{0:t}_i$, $\sum w^b_i=1$
+
+- $I^{0:t}$ denota el IPC nivel general, o cualquier índice de nivel superior, entre el período 0 y $t$;
+- $w^b_i$ es la ponderación asignada a cada índice de precios elemental;
+- $I^{0:t}_i$ es el índice de precios elemental correspondiente.
+
+Los índices elementales se identifican con el subíndice $i$, mientras que el índice de nivel superior no lleva subíndice. Como ya se señaló, un índice superior es cualquier índice, incluido el IPC nivel general, por encima del nivel del agregado elemental. Las ponderaciones se obtienen de los gastos en el período $b$, que en la práctica debe ser anterior al período 0, el período de referencia de los precios.
+
 
 # Índices 
 
