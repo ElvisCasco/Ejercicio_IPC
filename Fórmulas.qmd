@@ -12,8 +12,8 @@ format:
   #   code-fold: true
   docx: 
     toc: true
-    # reference-doc: custom-reference.docx
-    # css: styles.css
+    reference-doc: custom-reference.docx
+    css: styles.css
     documentclass: report
     # classoption: landscape
     geometry: "top=1in, bottom=1in, left=0.5in, right=0.1in"
@@ -38,7 +38,7 @@ import polars as pl
 # import reader
 # import time
 
-from great_tables import GT
+from great_tables import GT, exibble, style, loc, google_font
 # from math import ceil
 # from multiprocessing import Pool
 # from typing import Dict, Any
@@ -310,6 +310,8 @@ def obtener_indices(wd,region):
         "Producto","CCIF","División","Grupo","Clase","SubClase","Categoría","Región","Pond_Región","Pond_Producto_Region","Pond_IPC","Indice","Indice_Pond_Producto_Región","Indice_Pond_Producto_IPC"]
     res_producto.write_excel(
         workbook = wd + region + "/" + region + "_Producto.xlsx")
+    res_producto.write_excel(
+        workbook = wd + "Producto/" + region + "_Producto.xlsx")
 
     ## Índice de Precios por Agrupaciones: Media Ponderada
     agrupaciones = ["Categoría","SubClase","Clase","Grupo","División"]
@@ -363,24 +365,41 @@ def weighted_index_group_region(df,grupo):
         (pl.col("Índice_" + grupo) * pl.col("Peso_" + grupo) / 100).alias("Indice_Pond_Region"),
     )
     return result
+
+# Function to format numerical values 
+def format_number(x): 
+    if isinstance(x, (int, float)): 
+        return f"{x:.8f}" 
+        return x
+
+def weighted_index(group):
+    return (group['Indice'] * group['Pond_IPC']).sum() / group['Pond_IPC'].sum()
+
+def obtener_weighted_index_by_group(df,group):
+    weights_by_ipc = df.group_by(group).agg(pl.col('Pond_IPC').sum().alias('w_{IPC}'))
+    weighted_indices_by_group = df.group_by(group).agg(
+        (pl.col('Indice') * pl.col('Pond_IPC')).sum() / pl.col('Pond_IPC').sum())
+    result = weights_by_ipc.join(weighted_indices_by_group, on=group)
+    result = result.with_columns(
+        (pl.col('w_{IPC}') / 100).alias('w_{IPC}'))
+    result = result.with_columns(
+        (pl.col('w_{IPC}') / result['w_{IPC}'].sum()).alias('w_{b}'))  
+    result = result.rename({"Indice": "I^{0:t}"})
+    return result
+
+def obtener_numerical_columns(df):
+    numerical_columns = [col for col in df.columns if df[col].dtype in [pl.Float64, pl.Int64]]
+    return numerical_columns
 ```
 
 ```{python}
-# regions = ["MDC","RUC","MSPS","RUN","ULA","UOri","UOcc","US"]
-# for i, region in enumerate(regions):
-#     res = obtener_indices(wd,region)
-
-region = "MDC"
-p_t,c_t,p_t_1,c_t_1,pu_t,pu_t_1,i_t,res_variedad,res_producto, res_categoria, res_subclase, res_clase, res_grupo, res_division = obtener_indices(wd,region)
-res_producto
-grupo = "División"
-result =weighted_index_group_region(res_producto,grupo)
-result
+regions = ["MDC","RUC","MSPS","RUN","ULA","UOri","UOcc","US"]
+for i, region in enumerate(regions):
+    res = obtener_indices(wd,region)
+# {{< pagebreak >}}
 ```
 
-**Nota:** La explicación de los cálculos se toma del Manual, partiendo de los elementos mas pequeños: variedades por establecimiento. En dicho manual, a estos se les nombra como **agregados elementales**.
-
-{{< pagebreak >}}
+**Nota:** Para facilitar el entendimiento, primero se expone una breve explicación de conceptos y cálculos, tomada literalmente del Manual, partiendo de los elementos más pequeños: variedades por establecimiento. En dicho manual, a estos se les nombra como **agregados elementales**. Posteriormente, se presentan los resultados tomando en cuenta datos simulados, remitidos por GIE.
 
 # Índices, agregados elementales
 
@@ -394,7 +413,10 @@ Para su escogencia se tienen en cuenta los siguientes elementos:
 - Deberían estar compuestos de artículos de los cuales se esperan variaciones de precios parecidas, a efectos de minimizar la dispersión de las variaciones de precios dentro del agregado. 
 - Los agregados elementales deberían ser apropiados para servir como estratos para propósito de muestreo en función del régimen de muestreo que se establezca para la recopilación de datos.
 
-Utilizando una clasificación de los gastos del consumidor como la Clasificación del Consumo Individual por Finalidades (CCIF), todo el conjunto de bienes y servicios de consumo que abarca el IPC nivel general puede dividirse en **grupos**, por ejemplo "comestibles y bebidas no alcohólicas". Cada grupo se divide a su vez en **clases**, por ejemplo, "comestibles". A los fines del IPC, cada clase puede dividirse a su vez en **subclases** más homogéneas, como "arroz". Las subclases equivalen a los capítulos del Programa de Comparación Internacional, que calcula las paridades de poder adquisitivo (PPA) entre países. Finalmente, la subclase puede descomponerse aún más para obtener agregados elementales por regiones o puntos de venta.
+Utilizando una clasificación de los gastos del consumidor como la Clasificación del Consumo Individual por Finalidades (CCIF), todo el conjunto de bienes y servicios de consumo que abarca el índice de precios al consumidor (IPC) nivel general puede dividirse en **grupos**, por ejemplo "comestibles y bebidas no alcohólicas". Cada grupo se divide a su vez en **clases**, por ejemplo, "comestibles". A los fines del IPC, cada clase puede dividirse a su vez en **subclases** más homogéneas, como "arroz". Las subclases equivalen a los capítulos del Programa de Comparación Internacional, que calcula las paridades de poder adquisitivo (PPA) entre países. Finalmente, la subclase puede descomponerse aún más para obtener agregados elementales por regiones o puntos de venta.
+
+Dentro de cada agregado elemental se seleccionan uno o más artículos para representar todos los artículos pertenecientes a él. Por ejemplo, el agregado elemental compuesto por arroz en venta en supermercados del norte del país cubre todos los tipos de arroz, de los cuales se seleccionan como artículos representativos el arroz blanco precocido y el integral con más del 50% de granos partidos. Desde luego, en la práctica puede seleccionarse una mayor cantidad de artículos representativos. Finalmente, por cada uno puede seleccionarse una cantidad de productos específicos para la recopilación de precios, por ejemplo determinadas marcas de arroz precocido. Nuevamente, la cantidad de productos seleccionados para la muestra dependerá de la naturaleza del
+producto representativo.
 
 A continuación se analizan los métodos utilizados para calcular índices elementales a partir de observaciones sobre precios individuales. Todos los índices de nivel superior por encima del nivel agregado elemental se obtienen a partir de los índices de precios elementales utilizando como ponderaciones los agregados elementales de gastos. 
 
@@ -438,7 +460,7 @@ Para Honduras, a partir del código CCIF, se tienen productos por CCIF agrupados
 - Grupo: CCIF a 3 dígitos; y
 - División: CCIF a 2 dígitos.
 
-Las ponderaciones por producto son distintas por cada región:
+Las regiones a considerarse son:
 
 - MDC = Metropolitana Distrito Central
 - RUC = Resto Urbano Central
@@ -454,18 +476,23 @@ En la tabla se muestran los datos de los primeros 5 productos con sus respectiva
 ```{python}
 regions = ["MDC","RUC","MSPS","RUN","ULA","UOri","UOcc","US"]
 ponderaciones_producto_region = get_ponds_from_xlsx()
-GT(ponderaciones_producto_region[0:5,0:9]
-    ).fmt_number(columns="MDC", decimals=4)
+(
+    GT(ponderaciones_producto_region[0:5,0:9])
+    .fmt_number(columns="MDC", decimals=4)
+    .sub_missing()
+    .tab_style(
+        style=style.text(size="14px"),
+        locations=loc.body(columns=[
+            "Código","CCIF","División","Grupo","Clase","SubClase","Categoría","Producto"]))
+        # locations=loc.body(columns=ponderaciones_producto_region.columns))
+)
 ```
 
-Dentro de cada agregado elemental se seleccionan uno o más artículos para representar todos los artículos pertenecientes a él. Por ejemplo, el agregado elemental compuesto por arroz en venta en supermercados del norte del país cubre todos los tipos de arroz, de los cuales se seleccionan como artículos representativos el arroz blanco precocido y el integral con más del 50% de granos partidos. Desde luego, en la práctica puede seleccionarse una mayor cantidad de artículos representativos. Finalmente, por cada uno puede seleccionarse una cantidad de productos específicos para la recopilación de precios, por ejemplo determinadas marcas de arroz precocido. Nuevamente, la cantidad de productos seleccionados para la muestra dependerá de la naturaleza del
-producto representativo.
-
-Un ejemplo para Honduras, correspondiente al arroz clasificado (CCIF= 01111201) en MDC es:
+Un ejemplo de composición de agregados elementales para Honduras, correspondiente al arroz clasificado (CCIF= 01111201) en MDC es:
 
 ```{python}
 region = "MDC"
-p_t, c_t, p_t_1, c_t_1, pu_t, pu_t_1, i_t, res_variedad, res_producto, res_categoria, res_subclase, res_grupo, res_division = obtener_indices(wd,region)
+p_t,c_t,p_t_1,c_t_1,pu_t,pu_t_1,i_t,res_variedad,res_producto,res_categoria,res_subclase,res_clase,res_grupo,res_division = obtener_indices(wd,region)
 ```
 
 ```{python}
@@ -482,10 +509,10 @@ Este producto tiene tres subclasificaciones o variedades:
 
 Además, se consultan precios en dos tipos de establecimiento:
 
-- Supermercado (Yip's y La Colonia # 1); y
-- Mercadito (Los almendros y 5 estrellas)
+- Supermercado (1 y 2); y
+- Mercadito (1 y 2)
 
-El componente más pequeño que se definió es la variedad, misma que contiene datos de **precios** y **contenido** (conversión a unidad de medida); el **precio unitario** se obtiene mediante la división de los elementos de estas tablas.
+El componente más pequeño que se definió es la variedad, misma que contiene datos de **precios** y **contenido** (conversión a unidad de medida); el **precio unitario** se obtiene mediante la división de los elementos de estas tablas:
 
 ### 1. Precios en t, por establecimiento y producto:
 
@@ -567,11 +594,10 @@ $I^{0:t}_{Jp}=\prod (I_{Jv1}^{0:t},I_{Jv2}^{0:t},...,I_{Jvn}^{0:t})^\frac{1}{n}$
 
 $I^{0:t}_{Jp}= \exp \bigg(\frac{{\ln (I_{Jv1}^{0:t}) + \ln (I_{Jv2}^{0:t}) +...+\ln (I_{Jvn}^{0:t})}}{n}\bigg)$
 
-
 ```{python}
-GT(res_producto[0:1,0:10].filter(
+GT(res_producto[0:1,0:12].filter(
    ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
-))
+)).fmt_number(columns="Indice", decimals=4)
 ```
 
 # Cálculo de índices de nivel superior
@@ -605,49 +631,213 @@ $I^{0:t}=\sum w^b_i I^{0:t}_i$, $\sum w^b_i=1$
 
 Los índices elementales se identifican con el subíndice $i$, mientras que el índice de nivel superior no lleva subíndice. Como ya se señaló, un índice superior es cualquier índice, incluido el IPC nivel general, por encima del nivel del agregado elemental. Las ponderaciones se obtienen de los gastos en el período $b$, que en la práctica debe ser anterior al período 0, el período de referencia de los precios.
 
+## Ejemplo de procedimiento para índices de nivel superior: por productos, regiones y elementos de la CCIF
 
-# Índices 
+En el el ejercicio propuesto, la ponderación de las regiones es la siguiente:
 
-# Lowe:
+```{python}
+IPC = pl.read_excel(
+    source = wd + "Producto/" + regions[0] + "_Producto.xlsx",
+    infer_schema_length=None)
+for i, region in enumerate(regions[1:len(regions)]):
+    IPC = pl.concat([
+        IPC, 
+        pl.read_excel(
+            source = wd + "Producto/" + region + "_Producto.xlsx",
+            infer_schema_length=None)], 
+        how="vertical_relaxed")
+IPC.write_excel(
+    workbook = wd + "IPC.xlsx")
 
-El período cuyas cantidades efectivamente se utilizan en el IPC se conoce como *período de referencia de las ponderaciones*, y se denotará como período $b$. El período 0 es el período de referencia de los precios.
+df = pl.read_excel(
+        source = wd + "Categorias.xlsx",
+        sheet_name = "Zonas"
+    )[:,:3]
+df
+GT(df).fmt_number(columns="Ponderación", decimals=4)
+```
 
-Sea $n$ la cantidad de productos en una canasta con precios $p_i$ y cantidades $q_i$, y sean 0 y $t$ los dos períodos que se comparan. 
+El cálculo del IPC por región y general implica que se debe tomar en cuenta tanto la ponderación del producto por región y la ponderación de la región en el IPC. 
 
-El índice de Lowe $P_{Lo}$ para el producto $i$ de la región $r$ se define de la siguiente manera:
+Recordando que por cada producto se tiene la siguiente forma de agrupación (columnas):
 
-$P_{Lo}=\frac{\sum_{i=1}^n p_i^t q_i}{\sum_{i=1}^n p_0^t q_i}$
+```{python}
+GT(res_producto[0:1,0:9].filter(
+   ~pl.all_horizontal(pl.col(pl.Float64).is_nan())
+))
+```
 
-El índice de Lowe que utiliza las cantidades del período $b$ puede expresarse de la siguiente forma:
+Para todos los productos del IPC, las **agrupaciones** tomando en cuenta el CCIF (partiendo de lo específico a lo general) son:
 
-$P_{Lo}=\frac{\sum_{i=1}^n p_i^t q_i^b}{\sum_{i=1}^n p_i^0 q_i^b}$
+1. Producto;
+2. Categoría;
+3. SubClase;
+4. Clase:
+5. Grupo; y
+6. División.
 
-$P_{Lo}=\sum_{i=1}^n \frac{p_i^t}{p_i^0} s_i^{0b}$
+Tomando en cuenta la fórmula explicada previamente:
 
-donde
+$I^{0:t}=\sum w^b_i I^{0:t}_i$, $\sum w^b_i=1$
 
-$s_i^{0b}=\frac{p_i^0q_i^b}{\sum_{i=1}^n p_i^0q_i^b}$
+- $I^{0:t}$ denota el IPC nivel general, o cualquier índice de nivel superior, entre el período 0 y $t$;
+- $w^b_i$ es la ponderación asignada a cada índice de precios elemental; y
+- $I^{0:t}_i$ es el índice de precios elemental correspondiente.
 
-2. Índice de Precios por Establecimiento (e) y Variedad (V)
+Se pueden generar, a partir de los índices por producto y región y las ponderaciones por producto y región, combinaciones de agrupaciones y regiones para llegar al IPC general
 
-$i_{ev}^r = \frac{\frac{p_{ev,t}^r}{c_{ev,t}^r}}{\frac{p_{ev,t-1}^r}{c_{ev,t-1}^r}}$
+- IPC por productos y regiones
+- IPC por productos;
+- IPC por agrupaciones;
+- IPC por regiones y agrupaciones;
+- IPC general.
 
-3. Índice de Precios por Variedad: Media Geométrica
+### IPC por productos y regiones
 
-$i_V^r = \sqrt[n]{{i_{ev_1}^r,i_{ev_2}^r,...,i_{ev_n}^r}} \text{ for v in } V^r$
+Si seguimos con el ejemplo del arroz clasificado, los resultados por región son:
 
-$i_V^r = \exp (\frac{{\ln i_{ev_1}^r + \ln i_{ev_2}^r +...+\ln i_{ev_n}^r}}{n}) \text{ for v in } V^r$
+```{python}
+# Crear dataframe para IPC
+columns = ['Agrupación',"IPC"]
+# IPC_General = pl.DataFrame({col: [] for col in columns})
 
-4. Índice de Precios por Producto (X): Media Geométrica
+grupos = ["Producto","CCIF","Región"]
+producto = "01111201"
+result = obtener_weighted_index_by_group(IPC,grupos).sort(grupos)
+result.write_excel(
+    workbook = wd + "IPC_Productos_Regiones.xlsx")
+ipc_calc = (result["I^{0:t}"]*result["w_{b}"]).sum()
+# print("IPC = " + str((ipc_calc)))
+IPC_General = pl.DataFrame({'Agrupación': str(grupos), 'IPC': ipc_calc})
 
-$i_X^r = \sqrt[n]{{i_{V_1}^r,i_{V_2}^r,...,i_{V_n}^r}} \text{ for V in } X^r$
+arroz = result.filter(pl.col("Producto") == producto)
+GT(arroz.sort("Producto")).fmt_number(columns=obtener_numerical_columns(arroz), decimals=6)
+```
 
-$i_X^r = \exp (\frac{{\ln i_{V_1}^r + \ln i_{V_2}^r +...+\ln i_{V_n}^r}}{n}) \text{ for V in } X^r$
+El mismo procedimiento se aplica para el resto de los productos. En la tabla los valores se aproximan a 6 decimales, sin embargo, las operaciones dentro de los cálculos se realizan con todos los decimales disponibles.
 
-$Indice\_Pond^r$ = $i_X^r * w_X^r$
+### IPC por productos
 
-$IPC^r$ = $\sum{Indice\_Pond^r}$
+También puede obtenerse el IPC de este y los demás productos (I^{0:t}). Por razones de espacio, solamente se detallan los pertenecientes a la clase "0111":
 
-$w_A^r = \frac{w_X^r}{\sum w_X^r} \text{ for X in } A^r$
+```{python}
+grupos = ["Producto","CCIF"]
+result = obtener_weighted_index_by_group(IPC,grupos).sort(grupos)
+result.write_excel(
+    workbook = wd + "IPC_Producto.xlsx")
+result
+ipc_calc = (result["I^{0:t}"]*result["w_{b}"]).sum()
+# print("IPC = " + str((ipc_calc)))
+row = pl.DataFrame({'Agrupación': str(grupos), 'IPC': ipc_calc})
+IPC_General = IPC_General.vstack(row)
+GT(result[0:18].sort("Producto")).fmt_number(columns=obtener_numerical_columns(result), decimals=6)
+```
 
-$i_A^r = \sum i_X^r * \frac{w_X^r}{w_A^r} \text{ for X in } A^r$
+### IPC por elementos de CCIF
+
+#### Categorías
+
+Por razones de espacio, solamente se detallan los pertenecientes a la clase "0111":
+
+```{python}
+grupos = ["Categoría"]
+result = obtener_weighted_index_by_group(IPC,grupos).sort(grupos)
+result.write_excel(
+    workbook = wd + "IPC_" + grupos[0] + ".xlsx")
+# print("IPC = " + str((ipc_calc)))
+row = pl.DataFrame({'Agrupación': str(grupos), 'IPC': ipc_calc})
+IPC_General = IPC_General.vstack(row)
+GT(result[0:10].sort(grupos)).fmt_number(columns=obtener_numerical_columns(result), decimals=6)
+```
+
+#### SubClases
+
+Se detallan los pertenecientes a la clase "0111":
+
+```{python}
+grupos = ["SubClase"]
+result = obtener_weighted_index_by_group(IPC,grupos).sort(grupos)
+result.write_excel(
+    workbook = wd + "IPC_" + grupos[0] + ".xlsx")
+# print("IPC = " + str((ipc_calc)))
+row = pl.DataFrame({'Agrupación': str(grupos), 'IPC': ipc_calc})
+IPC_General = IPC_General.vstack(row)
+GT(result[0:6].sort(grupos)).fmt_number(columns=obtener_numerical_columns(result), decimals=6)
+```
+
+#### Clases
+
+Se detallan los pertenecientes a la división "01":
+
+```{python}
+grupos = ["Clase"]
+result = obtener_weighted_index_by_group(IPC,grupos).sort(grupos)
+result.write_excel(
+    workbook = wd + "IPC_" + grupos[0] + ".xlsx")
+# print("IPC = " + str((ipc_calc)))
+row = pl.DataFrame({'Agrupación': str(grupos), 'IPC': ipc_calc})
+IPC_General = IPC_General.vstack(row)
+GT(result[0:15].sort(grupos)).fmt_number(columns=obtener_numerical_columns(result), decimals=6)
+```
+
+#### Grupos
+
+```{python}
+grupos = ["Grupo"]
+result = obtener_weighted_index_by_group(IPC,grupos).sort(grupos)
+result.write_excel(
+    workbook = wd + "IPC_" + grupos[0] + ".xlsx")
+# print("IPC = " + str((ipc_calc)))
+row = pl.DataFrame({'Agrupación': str(grupos), 'IPC': ipc_calc})
+IPC_General = IPC_General.vstack(row)
+GT(result.sort(grupos)).fmt_number(columns=obtener_numerical_columns(result), decimals=6)
+```
+
+#### Divisiones
+
+```{python}
+grupos = ["División"]
+result = obtener_weighted_index_by_group(IPC,grupos).sort(grupos)
+result.write_excel(
+    workbook = wd + "IPC_" + grupos[0] + ".xlsx")
+# print("IPC = " + str((ipc_calc)))
+row = pl.DataFrame({'Agrupación': str(grupos), 'IPC': ipc_calc})
+IPC_General = IPC_General.vstack(row)
+GT(result.sort(grupos)).fmt_number(columns=obtener_numerical_columns(result), decimals=6)
+```
+
+### IPC por regiones
+
+```{python}
+grupos = ["Región"]
+result = obtener_weighted_index_by_group(IPC,grupos).sort(grupos)
+result.write_excel(
+    workbook = wd + "IPC_Regiones.xlsx")
+# print("IPC = " + str((ipc_calc)))
+row = pl.DataFrame({'Agrupación': str(grupos), 'IPC': ipc_calc})
+IPC_General = IPC_General.vstack(row)
+GT(result).fmt_number(columns=obtener_numerical_columns(result), decimals=6)
+```
+
+Igualmente puede aplicarse la fórmula para obtener componentes del IPC por regiones, por ejemplo divisiones por región; por razones de espacio, se muestra solamente la correspondiente a la División "01":
+
+```{python}
+grupos = ["División","Región"]
+result = obtener_weighted_index_by_group(IPC,grupos).sort(grupos)
+result.write_excel(
+    workbook = wd + "IPC_Regiones_Divisiones.xlsx")
+# print("IPC = " + str((ipc_calc)))
+row = pl.DataFrame({'Agrupación': str(grupos), 'IPC': ipc_calc})
+IPC_General = IPC_General.vstack(row)
+GT(result[0:8]).fmt_number(columns=obtener_numerical_columns(result), decimals=6)
+```
+
+### IPC general
+
+En todos los casos presentados, el IPC general se obtiene mediante:
+
+$IPC^{0:t}=\sum w^b_i I^{0:t}_i$, $\sum w^b_i=1$
+
+```{python}
+GT(IPC_General).fmt_number(columns=obtener_numerical_columns(IPC_General), decimals=8)
+```
