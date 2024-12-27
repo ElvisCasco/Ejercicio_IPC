@@ -44,7 +44,8 @@ from great_tables import GT, exibble, style, loc, google_font
 # from typing import Dict, Any
 # from typing import Optional
 
-wd = "C:/Directorio_Trabajo/2024/IPC_Calc/"
+# wd = "C:/Directorio_Trabajo/2024/IPC_Calc/"
+wd = "//srvfs02/IE/Investigaciones/2025/IPC_Calc/"
 ```
 
 ```{python}
@@ -71,6 +72,7 @@ def get_ponds_from_xlsx():
         pl.col("Código").str.slice(0, 6).alias("Categoría"),
         pl.col("Código").str.slice(0, 8).alias("Producto"),
         )
+    df.write_parquet(wd + "data/Categorias.parquet")
     return df
 
 # DataFrame de índices desde hoja de Excel
@@ -205,6 +207,12 @@ def obtener_precio_t(region):
         pl.col('Codigo').str.replace(pattern,""))
     return df_Precio_t
 
+def obtener_serie_precio_t(region):
+    df = obtener_precio_t(region)
+    df.transpose(
+        include_header=True, header_name="Variedad", column_names=[df.columns[3:]]
+    )
+
 def obtener_contenido_t(region):
     df = obtener_dataframe(region)
     df_Contenido_t = df.filter(
@@ -217,6 +225,119 @@ def obtener_contenido_t(region):
     df_Contenido_t = df_Contenido_t.with_columns(
         pl.col('Codigo').str.replace(pattern,""))
     return df_Contenido_t
+```
+
+```{python}
+def guardar_parquet(region):
+    # region = "MDC"
+    #### en t-1
+    df = obtener_precio_t_1(region)
+    precio_unitario_t_1 = (
+        df
+        .unpivot(index=df.columns[:3], value_name='Precio_Unitario_t_1')
+        .rename({df.columns[0]: "Establecimiento","variable":"Variedad"})
+        .cast({"Precio_Unitario_t_1": pl.Float64},strict=False)
+        .with_columns(Region = pl.lit(region))
+    )
+    # precio_unitario_t_1.write_parquet(wd + "data/" + region + "_precio_unitario_t_1.parquet")
+    df = obtener_contenido_t_1(region)
+    contenido_t_1 = (
+        df
+        .unpivot(index=df.columns[:3], value_name='Contenido_t_1')
+        .rename({df.columns[0]: "Establecimiento","variable":"Variedad"})
+        .cast({"Contenido_t_1": pl.Float64},strict=False)
+    )
+    # contenido_t_1.write_parquet(wd  + "data/" + region + "_contenido_t_1.parquet")
+    precio_t_1 = (
+        pl.concat([
+            pl.DataFrame(precio_unitario_t_1["Region","Codigo","Establecimiento","Variedad","Precio_Unitario_t_1"]),
+            pl.DataFrame(contenido_t_1["Contenido_t_1"])], 
+            how="horizontal")
+        .with_columns(
+            (pl.col("Precio_Unitario_t_1") * pl.col("Contenido_t_1")).alias('Precio_t_1'))
+    )
+    precio_t_1.write_parquet(wd + "data/" + region + "_precio_t_1.parquet")
+
+    #### en t
+    df = obtener_precio_t(region)
+    precio_unitario_t = (
+        df
+        .unpivot(index=df.columns[:3], value_name='Precio_Unitario_t')
+        .rename({df.columns[0]: "Establecimiento","variable":"Variedad"})
+        .cast({"Precio_Unitario_t": pl.Float64},strict=False)
+        .with_columns(Region = pl.lit(region))
+    )
+    # precio_unitario_t.write_parquet(wd + "data/" + region + "_precio_unitario_t.parquet")
+    df = obtener_contenido_t(region)
+    contenido_t = (
+        df
+        .unpivot(index=df.columns[:3], value_name='Contenido_t')
+        .rename({df.columns[0]: "Establecimiento","variable":"Variedad"})
+        .cast({"Contenido_t": pl.Float64},strict=False)
+    )
+    # contenido_t.write_parquet(wd + "data/" + region + "_contenido_t.parquet")
+    precio_t = (
+        pl.concat([
+            pl.DataFrame(precio_unitario_t["Region","Codigo","Establecimiento","Variedad","Precio_Unitario_t"]),
+            pl.DataFrame(contenido_t["Contenido_t"])], 
+            how="horizontal")
+        .with_columns((pl.col("Precio_Unitario_t") * pl.col("Contenido_t")).alias('Precio_t'))
+    )
+    precio_t.write_parquet(wd + "data/" + region + "_precio_t.parquet")
+    precios = (
+        pl.concat([
+            pl.DataFrame(precio_t_1[
+                "Region","Codigo","Establecimiento","Variedad",
+                "Precio_Unitario_t_1","Contenido_t_1","Precio_t_1"]),
+            pl.DataFrame(precio_t["Precio_Unitario_t","Contenido_t","Precio_t"])], 
+            how="horizontal")
+    )
+    precios.write_parquet(wd + "data/" + region + "_precios.parquet")
+    return precios
+```
+
+```{python}
+# Serie de precios e índices, por región, establecimietno y variedad
+regions = ["MDC","RUC","MSPS","RUN","ULA","UOri","UOcc","US"]
+precios_all = pl.DataFrame(schema={
+    "Region":str, 
+    "Codigo":str, 
+    "Establecimiento":str, 
+    "Variedad":str, 
+    "Precio_Unitario_t_1":float,
+    "Contenido_t_1":float,
+    "Precio_t_1":float,
+    "Precio_Unitario_t":float,
+    "Contenido_t":float,
+    "Precio_t":float,
+    })
+for i, region in enumerate(regions):
+    precios = guardar_parquet(region)
+    precios_all = (
+        pl.concat([
+            pl.DataFrame(precios_all),
+            pl.DataFrame(precios)], 
+            how="vertical")
+    )
+precios_all = (
+    precios_all
+    .with_columns(
+        (pl.col("Precio_t") / pl.col("Precio_t_1")).alias('I_v'))
+)
+precios_all.write_parquet(wd + "data/precios_all.parquet")
+precios_all.write_csv(wd + "data/precios_all.csv")
+```
+
+```{python}
+import duckdb
+conn = duckdb.connect(database=':memory:')
+result = conn.execute(
+    """
+    CREATE OR REPLACE TABLE variedades AS
+    SELECT *,
+    FROM "//srvfs02/IE/Investigaciones/2025/IPC_Calc/data/precios_all.parquet"
+    """).pl()
+result
 ```
 
 ```{python}
