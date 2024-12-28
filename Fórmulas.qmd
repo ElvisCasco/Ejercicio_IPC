@@ -32,8 +32,8 @@ jupyter: python3
 # import matplotlib.pyplot as plt
 import numpy as np
 # import os
-import polars as pl
 # import pandas as pd
+import polars as pl
 # import pyarrow
 # import reader
 # import time
@@ -46,6 +46,7 @@ from great_tables import GT, exibble, style, loc, google_font
 
 # wd = "C:/Directorio_Trabajo/2024/IPC_Calc/"
 wd = "//srvfs02/IE/Investigaciones/2025/IPC_Calc/"
+wd = "C:/Trabajo/GitHub/Ejercicio_IPC-main/"
 ```
 
 ```{python}
@@ -228,7 +229,7 @@ def obtener_contenido_t(region):
 ```
 
 ```{python}
-def guardar_parquet(region):
+def guardar_precios(region):
     # region = "MDC"
     #### en t-1
     df = obtener_precio_t_1(region)
@@ -253,10 +254,10 @@ def guardar_parquet(region):
             pl.DataFrame(precio_unitario_t_1["Region","Codigo","Establecimiento","Variedad","Precio_Unitario_t_1"]),
             pl.DataFrame(contenido_t_1["Contenido_t_1"])], 
             how="horizontal")
-        .with_columns(
-            (pl.col("Precio_Unitario_t_1") * pl.col("Contenido_t_1")).alias('Precio_t_1'))
+        # .with_columns(
+            # (pl.col("Precio_Unitario_t_1") / pl.col("Contenido_t_1")).alias('Precio_t_1'))
     )
-    precio_t_1.write_parquet(wd + "data/" + region + "_precio_t_1.parquet")
+    # precio_t_1.write_parquet(wd + "data/" + region + "_precio_t_1.parquet")
 
     #### en t
     df = obtener_precio_t(region)
@@ -281,18 +282,20 @@ def guardar_parquet(region):
             pl.DataFrame(precio_unitario_t["Region","Codigo","Establecimiento","Variedad","Precio_Unitario_t"]),
             pl.DataFrame(contenido_t["Contenido_t"])], 
             how="horizontal")
-        .with_columns((pl.col("Precio_Unitario_t") * pl.col("Contenido_t")).alias('Precio_t'))
+        # .with_columns(
+        #     (pl.col("Precio_Unitario_t") / pl.col("Contenido_t")).alias('Precio_t'))
     )
-    precio_t.write_parquet(wd + "data/" + region + "_precio_t.parquet")
+    # precio_t.write_parquet(wd + "data/" + region + "_precio_t.parquet")
+
     precios = (
         pl.concat([
             pl.DataFrame(precio_t_1[
                 "Region","Codigo","Establecimiento","Variedad",
-                "Precio_Unitario_t_1","Contenido_t_1","Precio_t_1"]),
-            pl.DataFrame(precio_t["Precio_Unitario_t","Contenido_t","Precio_t"])], 
+                "Precio_Unitario_t_1","Contenido_t_1"]),#,"Precio_t_1"]),
+            pl.DataFrame(precio_t["Precio_Unitario_t","Contenido_t"])],#,"Precio_t"])], 
             how="horizontal")
     )
-    precios.write_parquet(wd + "data/" + region + "_precios.parquet")
+    # precios.write_parquet(wd + "data/" + region + "_precios.parquet")
     return precios
 ```
 
@@ -306,39 +309,310 @@ precios_all = pl.DataFrame(schema={
     "Variedad":str, 
     "Precio_Unitario_t_1":float,
     "Contenido_t_1":float,
-    "Precio_t_1":float,
+    # "Precio_t_1":float,
     "Precio_Unitario_t":float,
     "Contenido_t":float,
-    "Precio_t":float,
+    # "Precio_t":float,
     })
 for i, region in enumerate(regions):
-    precios = guardar_parquet(region)
+    precios = guardar_precios(region)
     precios_all = (
         pl.concat([
             pl.DataFrame(precios_all),
             pl.DataFrame(precios)], 
             how="vertical")
     )
-precios_all = (
-    precios_all
-    .with_columns(
-        (pl.col("Precio_t") / pl.col("Precio_t_1")).alias('I_v'))
-)
+
+# precios_all = (
+#     precios_all
+#     .with_columns(
+#         (pl.col("Precio_t") / pl.col("Precio_t_1")).alias('I_c'))
+# )
 precios_all.write_parquet(wd + "data/precios_all.parquet")
 precios_all.write_csv(wd + "data/precios_all.csv")
 ```
 
+# Resultados usando DuckDB
+
 ```{python}
 import duckdb
 conn = duckdb.connect(database=':memory:')
-result = conn.execute(
+# Calcular precios e índices, por variedad y establecimiento
+conn.execute(
     """
     CREATE OR REPLACE TABLE variedades AS
     SELECT *,
-    FROM "//srvfs02/IE/Investigaciones/2025/IPC_Calc/data/precios_all.parquet"
+    -- Precios = Precio_Unitario * Contenido
+    Precio_Unitario_t_1 / Contenido_t_1 AS Precio_t_1,
+    Precio_Unitario_t / Contenido_t AS Precio_t,
+    -- I_c = Precio_t / Preci_t_1
+    Precio_t / Precio_t_1 AS I_c,
+    FROM "data/precios_all.parquet"
+    """)
+# Guardar en archivo .parquet
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM variedades)
+        TO 'data/precios_all.parquet'
+        (FORMAT 'parquet');
+    FROM variedades
     """).pl()
-result
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM variedades)
+        TO 'data/precios_all.csv'
+        (FORMAT 'csv');
+    FROM variedades
+    """).pl()
 ```
+
+```{python}
+# Índices por variedad, media geométrica
+conn.execute(
+    """
+    CREATE OR REPLACE TABLE indices_variedades AS
+    SELECT Region,Variedad,--,Codigo,
+    array_slice(Variedad,1,8) AS Código,
+    geomean(I_c) * 100 AS I_v,
+    FROM variedades
+    GROUP BY Region,Variedad--,Codigo
+    ORDER BY Region,Variedad--,Codigo
+    """)
+# Guardar en archivo .parquet
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_variedades)
+        TO 'data/indices_variedades.parquet'
+        (FORMAT 'parquet');
+    FROM indices_variedades
+    """).pl()
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_variedades)
+        TO 'data/indices_variedades.csv'
+        (FORMAT 'csv');
+    FROM indices_variedades
+    """).pl()
+```
+
+```{python}
+# Ponderaciones por productos
+conn.execute(
+    """
+    INSTALL spatial;
+    LOAD spatial;
+    CREATE OR REPLACE TABLE ponderaciones AS
+    SELECT Estructura,Código,CCIF,Region,Pond_IPC 
+    FROM st_read(
+        'Categorias.xlsx', 
+        layer = 'IPC_Calc',
+        open_options = ['HEADERS=FORCE']);
+    """).pl()
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM ponderaciones)
+        TO 'data/ponderaciones.parquet'
+        (FORMAT 'parquet');
+    FROM ponderaciones
+    """).pl()
+```
+
+```{python}
+# Índices por producto, media geométrica
+conn.execute(
+    """
+    CREATE OR REPLACE TABLE indices_producto AS
+    SELECT Region,Código,--,Codigo,
+    geomean(I_v) AS I_p,
+    array_slice(Código,1,2) AS Division,
+    array_slice(Código,1,3) AS Grupo,
+    array_slice(Código,1,4) AS Clase,
+    array_slice(Código,1,5) AS SubClase,
+    array_slice(Código,1,6) AS Categoria,
+    FROM indices_variedades
+    GROUP BY Region,Código--,Codigo
+    ORDER BY Region,Código--,Codigo
+    """)
+conn.execute(
+    """
+    CREATE OR REPLACE TABLE indices_producto AS
+    SELECT *
+    FROM ponderaciones
+    JOIN indices_producto
+    USING (Código,Region),
+    ORDER BY Region,Código--,Codigo
+    """)
+# Guardar en archivo .parquet
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_producto)
+        TO 'data/indices_producto.parquet'
+        (FORMAT 'parquet');
+    FROM indices_producto
+    ORDER BY Código,Region
+    """).pl()
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_producto)
+        TO 'data/indices_producto.csv'
+        (FORMAT 'csv');
+    FROM indices_producto
+    """).pl()
+```
+
+## Agrupaciones
+
+```{python}
+# IPC por productos
+conn.execute(
+    """
+    CREATE OR REPLACE TABLE indices_g_producto AS
+    SELECT Código,
+    sum(I_p * Pond_IPC) / sum(Pond_IPC) AS I_b,
+    sum(Pond_IPC) AS w_b,
+    FROM indices_producto
+    GROUP BY Código
+    ORDER BY Código
+    """)
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_g_producto)
+        TO 'data/indices_g_producto.parquet'
+        (FORMAT 'parquet');
+    FROM indices_g_producto
+    """).pl()
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_g_producto)
+        TO 'data/indices_g_producto.csv'
+        (FORMAT 'csv');
+    FROM indices_g_producto
+    """).pl()
+```
+
+
+```{python}
+# IPC por regiones
+conn.execute(
+    """
+    CREATE OR REPLACE TABLE indices_g_Region AS
+    SELECT Region,
+    sum(I_p * Pond_IPC) / sum(Pond_IPC) AS I_b,
+    sum(Pond_IPC) AS w_b,
+    FROM indices_producto
+    GROUP BY Region
+    ORDER BY Region
+    """)
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_g_Region)
+        TO 'data/indices_g_Region.parquet'
+        (FORMAT 'parquet');
+    FROM indices_g_Region
+    """).pl()
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_g_Region)
+        TO 'data/indices_g_Region.csv'
+        (FORMAT 'csv');
+    FROM indices_g_Region
+    """).pl()
+```
+
+```{python}
+# IPC por divisiones
+conn.execute(
+    """
+    CREATE OR REPLACE TABLE indices_g_Division AS
+    SELECT Division,
+    sum(I_p * Pond_IPC) / sum(Pond_IPC) AS I_b,
+    sum(Pond_IPC) AS w_b,
+    FROM indices_producto
+    GROUP BY Division
+    ORDER BY Division
+    """)
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_g_Division)
+        TO 'data/indices_g_Division.parquet'
+        (FORMAT 'parquet');
+    FROM indices_g_Division
+    """).pl()
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_g_Division)
+        TO 'data/indices_g_Division.csv'
+        (FORMAT 'csv');
+    FROM indices_g_Division
+    """).pl()
+```
+
+```{python}
+# IPC por grupos
+conn.execute(
+    """
+    CREATE OR REPLACE TABLE indices_g_Grupo AS
+    SELECT Grupo,
+    sum(I_p * Pond_IPC) / sum(Pond_IPC) AS I_b,
+    sum(Pond_IPC) AS w_b,
+    FROM indices_producto
+    GROUP BY Grupo
+    ORDER BY Grupo
+    """)
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_g_Grupo)
+        TO 'data/indices_g_Grupo.parquet'
+        (FORMAT 'parquet');
+    FROM indices_g_Grupo
+    """).pl()
+conn.execute(
+    """
+    COPY
+        (SELECT * 
+        FROM indices_g_Grupo)
+        TO 'data/indices_g_Grupo.csv'
+        (FORMAT 'csv');
+    FROM indices_g_Grupo
+    """).pl()
+```
+
+
+
+
+# Resultados usando Polars
+
+
+
+
 
 ```{python}
 def obtener_indices(wd,region):
@@ -651,7 +925,7 @@ GT(c_t[:,0:6].filter(
 ))
 ```
 
-### 3. Precios unitarios (Precios / Contenido) en t, por establecimiento y producto:
+### 3. Precios unitarios (Precios * Contenido) en t, por establecimiento y producto:
 
 ```{python}
 GT(pu_t[:,0:6].filter(
@@ -675,7 +949,7 @@ GT(c_t_1[:,0:6].filter(
 ))
 ```
 
-### 6. Precios unitarios (Precios / Contenido) en t-1, por establecimiento y producto:
+### 6. Precios unitarios (Precios * Contenido) en t-1, por establecimiento y producto:
 
 ```{python}
 GT(pu_t_1[:,0:6].filter(
