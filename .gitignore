@@ -16,3 +16,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Generated outputs from Fórmulas.qmd
+data/
+Producto/
+render_log.txt
