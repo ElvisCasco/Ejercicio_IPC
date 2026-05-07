@@ -24,14 +24,75 @@ format:
 jupyter: python3
 ---
 
-```{python}
-# %pip install --upgrade polars
+# Índices
 
+El período cuyas cantidades efectivamente se utilizan en el IPC se conoce como *período de referencia de las ponderaciones*, y se denotará como período $b$. El período 0 es el período de referencia de los precios.
+
+Sea $n$ la cantidad de productos en una canasta con precios $p_i$ y cantidades $q_i$, y sean 0 y $t$ los dos períodos que se comparan.
+
+El índice de Lowe $P_{Lo}$ para el producto $i$ de la región $r$ se define de la siguiente manera:
+
+$P_{Lo}=\frac{\sum_{i=1}^n p_i^t q_i}{\sum_{i=1}^n p_0^t q_i}$
+
+El índice de Lowe que utiliza las cantidades del período $b$ puede expresarse de la siguiente forma:
+
+$P_{Lo}=\frac{\sum_{i=1}^n p_i^t q_i^b}{\sum_{i=1}^n p_i^0 q_i^b}$
+
+$P_{Lo}=\sum_{i=1}^n \frac{p_i^t}{p_i^0} s_i^{0b}$
+
+donde
+
+$s_i^{0b}=\frac{p_i^0q_i^b}{\sum_{i=1}^n p_i^0q_i^b}$
+
+2. Índice de Precios por Establecimiento (e) y Variedad (V)
+
+$i_{ev}^r = \frac{\frac{p_{ev,t}^r}{c_{ev,t}^r}}{\frac{p_{ev,t-1}^r}{c_{ev,t-1}^r}}$
+
+3. Índice de Precios por Variedad: Media Geométrica
+
+$i_V^r = \sqrt[n]{{i_{ev_1}^r,i_{ev_2}^r,...,i_{ev_n}^r}} \text{ for v in } V^r$
+
+$i_V^r = \exp (\frac{{\ln i_{ev_1}^r + \ln i_{ev_2}^r +...+\ln i_{ev_n}^r}}{n}) \text{ for v in } V^r$
+
+4. Índice de Precios por Producto (X): Media Geométrica
+
+$i_X^r = \sqrt[n]{{i_{V_1}^r,i_{V_2}^r,...,i_{V_n}^r}} \text{ for V in } X^r$
+
+$i_X^r = \exp (\frac{{\ln i_{V_1}^r + \ln i_{V_2}^r +...+\ln i_{V_n}^r}}{n}) \text{ for V in } X^r$
+
+$Indice\_Pond^r$ = $i_X^r * w_X^r$
+
+$IPC^r$ = $\sum{Indice\_Pond^r}$
+
+$w_A^r = \frac{w_X^r}{\sum w_X^r} \text{ for X in } A^r$
+
+$i_A^r = \sum i_X^r * \frac{w_X^r}{w_A^r} \text{ for X in } A^r$
+
+```{python}
+#| label: install-deps
+#| include: false
+import importlib, subprocess, sys
+
+required = {
+    "numpy": "numpy",
+    "polars": "polars",
+    "fastexcel": "fastexcel",          # polars Excel backend
+    "great_tables": "great_tables",
+    "duckdb": "duckdb",
+    "pyarrow": "pyarrow",
+}
+missing = [pip_name for mod, pip_name in required.items()
+           if importlib.util.find_spec(mod) is None]
+if missing:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
+```
+
+```{python}
 # import duckdb
 # import glob
 # import matplotlib.pyplot as plt
 import numpy as np
-# import os
+# import osup
 # import pandas as pd
 import polars as pl
 # import pyarrow
@@ -45,8 +106,23 @@ from great_tables import GT, exibble, style, loc, google_font
 # from typing import Optional
 
 # wd = "C:/Directorio_Trabajo/2024/IPC_Calc/"
-wd = "//srvfs02/IE/Investigaciones/2025/IPC_Calc/"
-wd = "C:/Trabajo/GitHub/Ejercicio_IPC-main/"
+# wd = "//srvfs02/IE/Investigaciones/2025/IPC_Calc/"
+# wd = "C:/Trabajo/GitHub/Ejercicio_IPC-main/"
+
+# Resolve the directory containing this .qmd file.
+# - When rendered with Quarto, QUARTO_PROJECT_DIR / QUARTO_DOCUMENT_PATH are set.
+# - Interactively (Jupyter / VS Code), fall back to __file__ or cwd.
+import os
+from pathlib import Path
+
+_qmd_path = (
+    os.environ.get("QUARTO_DOCUMENT_PATH")
+    or os.environ.get("QUARTO_PROJECT_DIR")
+    or globals().get("__file__")
+    or os.getcwd()
+)
+wd = str(Path(_qmd_path).resolve().parent if Path(_qmd_path).is_file()
+         else Path(_qmd_path).resolve()) + "/"
 ```
 
 ```{python}
@@ -80,7 +156,8 @@ def get_ponds_from_xlsx():
 def get_df_from_xlsx(region):
     df = pl.read_excel(
         source = wd + "Ejercicio calculo IPC - Investigación.xlsx",
-        sheet_name = region
+        sheet_name = region,
+        infer_schema_length = None,
     )[:,2:]
     return df
 
@@ -410,9 +487,9 @@ conn.execute(
     INSTALL spatial;
     LOAD spatial;
     CREATE OR REPLACE TABLE ponderaciones AS
-    SELECT Estructura,Código,CCIF,Region,Pond_IPC 
+    SELECT Estructura,Código,CCIF,Región AS Region,Pond_IPC
     FROM st_read(
-        'Categorias.xlsx', 
+        'Categorias.xlsx',
         layer = 'IPC_Calc',
         open_options = ['HEADERS=FORCE']);
     """).pl()
@@ -685,7 +762,9 @@ def obtener_indices(wd,region):
         .agg(
             pl.map_groups(
                 exprs=["Indice"],
-                function=geometric_mean)
+                function=geometric_mean,
+                return_dtype=pl.Float64,
+                returns_scalar=True)
         ))
     ponderaciones_producto_region = get_ponds_from_xlsx()
     res_producto = res_producto.join(

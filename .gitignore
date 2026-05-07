@@ -1,0 +1,18 @@
+# Python virtual environment
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Quarto
+/.quarto/
+*_files/
+*.quarto_ipynb
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/

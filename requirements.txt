@@ -1,0 +1,8 @@
+numpy
+polars
+fastexcel
+great_tables
+duckdb
+pyarrow
+jupyter
+ipykernel
